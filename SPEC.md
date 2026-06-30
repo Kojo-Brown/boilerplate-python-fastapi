@@ -1,0 +1,36 @@
+# Spec: boilerplate-python-fastapi
+
+> Spec-driven. Mark `[x]` only after pushing.
+
+## Phase 1 — Foundation
+- [x] FastAPI 0.138 + Python 3.14 project with `uv` package manager
+- [x] Pydantic v2 settings with `.env` validation
+- [x] SQLAlchemy 2.0 async engine + Alembic migrations
+- [x] PostgreSQL schema: User, RefreshToken models
+- [x] Structured logging with `structlog`
+
+## Phase 2 — Auth
+- [ ] JWT auth: register, login, access + refresh token rotation (python-jose)
+- [ ] Argon2 password hashing (`argon2-cffi`)
+- [ ] OAuth 2.0 Google flow (authlib)
+- [ ] Rate limiting with `slowapi`
+- [ ] Dependency injectors: `get_current_user`, `require_role`
+
+## Phase 3 — API Design
+- [ ] Versioned router: `/api/v1/`
+- [ ] Generic `Page[T]` cursor pagination response model
+- [ ] Custom exception handler → consistent JSON errors
+- [ ] Request ID middleware + structured request logging
+
+## Phase 4 — Data Layer
+- [ ] Repository pattern: `BaseRepository[T]` with async SQLAlchemy
+- [ ] Async background tasks with `asyncio` + FastAPI `BackgroundTasks`
+- [ ] Celery + Redis task queue example (email sending)
+- [ ] S3 file upload helper with presigned URLs (boto3)
+
+## Phase 5 — Testing & DevOps
+- [ ] Pytest + HTTPX async test client
+- [ ] Factory fixtures with `faker` + `pytest-factoryboy`
+- [ ] Coverage: 80% threshold
+- [ ] GitHub Actions: lint (ruff) → typecheck (mypy) → test → Docker push
+- [ ] Multi-stage Dockerfile + docker-compose
