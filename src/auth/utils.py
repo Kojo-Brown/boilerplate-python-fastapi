@@ -1,24 +1,11 @@
 from datetime import UTC, datetime, timedelta
 
-from argon2 import PasswordHasher
-from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from jose import JWTError, jwt
 
+from src.auth.password import hash_password, needs_rehash, verify_password
 from src.config import settings
 
-_ph = PasswordHasher()
-
-
-def hash_password(plain: str) -> str:
-    return _ph.hash(plain)
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    try:
-        _ph.verify(hashed, plain)
-        return True
-    except (VerifyMismatchError, VerificationError, InvalidHashError):
-        return False
+__all__ = ["hash_password", "needs_rehash", "verify_password"]
 
 
 def create_access_token(user_id: str, email: str, role: str) -> str:
