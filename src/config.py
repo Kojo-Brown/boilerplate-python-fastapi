@@ -16,5 +16,12 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
 
+    # Argon2 parameters (OWASP recommended minimums)
+    ARGON2_TIME_COST: int = 2
+    ARGON2_MEMORY_COST: int = 65536  # 64 MiB
+    ARGON2_PARALLELISM: int = 2
+    ARGON2_HASH_LEN: int = 32
+    ARGON2_SALT_LEN: int = 16
+
 
 settings = Settings()
