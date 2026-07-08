@@ -29,6 +29,10 @@ class User(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    oauth_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    oauth_sub: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
 
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(  # noqa: F821
         back_populates="user", cascade="all, delete-orphan"

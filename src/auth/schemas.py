@@ -31,3 +31,11 @@ class UserResponse(BaseModel):
     is_verified: bool
 
     model_config = {"from_attributes": True}
+
+
+class OAuthUserInfo(BaseModel):
+    sub: str
+    email: EmailStr
+    name: str | None = None
+    picture: str | None = None
+    email_verified: bool = False
