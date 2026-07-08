@@ -13,6 +13,7 @@ from src.auth.schemas import (
 )
 from src.auth.service import AuthService
 from src.database import get_db
+from src.limiter import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -23,7 +24,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user",
 )
+@limiter.limit("5/minute")
 async def register(
+    request: Request,
     data: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
@@ -41,7 +44,9 @@ async def register(
     response_model=TokenResponse,
     summary="Login and receive access + refresh tokens",
 )
+@limiter.limit("5/minute")
 async def login(
+    request: Request,
     data: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
@@ -61,7 +66,9 @@ async def login(
     response_model=TokenResponse,
     summary="Rotate refresh token and get new access + refresh tokens",
 )
+@limiter.limit("10/minute")
 async def refresh(
+    request: Request,
     data: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
@@ -81,7 +88,9 @@ async def refresh(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Revoke refresh token",
 )
+@limiter.limit("10/minute")
 async def logout(
+    request: Request,
     data: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -93,6 +102,7 @@ async def logout(
     "/google",
     summary="Initiate Google OAuth 2.0 login",
 )
+@limiter.limit("10/minute")
 async def google_login(request: Request) -> RedirectResponse:
     """Redirect the browser to Google's OAuth consent screen."""
     redirect_uri = str(request.url_for("google_callback"))
@@ -105,6 +115,7 @@ async def google_login(request: Request) -> RedirectResponse:
     name="google_callback",
     summary="Handle Google OAuth 2.0 callback and issue JWT tokens",
 )
+@limiter.limit("10/minute")
 async def google_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
