@@ -14,7 +14,7 @@
 - [x] Argon2 password hashing (`argon2-cffi`)
 - [x] OAuth 2.0 Google flow (authlib)
 - [x] Rate limiting with `slowapi`
-- [ ] Dependency injectors: `get_current_user`, `require_role`
+- [x] Dependency injectors: `get_current_user`, `require_role`
 
 ## Phase 3 — API Design
 - [ ] Versioned router: `/api/v1/`
