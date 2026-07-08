@@ -23,5 +23,10 @@ class Settings(BaseSettings):
     ARGON2_HASH_LEN: int = 32
     ARGON2_SALT_LEN: int = 16
 
+    # Google OAuth 2.0
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
+
 
 settings = Settings()

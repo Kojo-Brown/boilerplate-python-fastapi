@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.auth.oauth import oauth
 from src.auth.schemas import (
     LoginRequest,
+    OAuthUserInfo,
     RefreshRequest,
     RegisterRequest,
     TokenResponse,
@@ -84,3 +87,57 @@ async def logout(
 ) -> None:
     service = AuthService(db)
     await service.logout(data.refresh_token)
+
+
+@router.get(
+    "/google",
+    summary="Initiate Google OAuth 2.0 login",
+)
+async def google_login(request: Request) -> RedirectResponse:
+    """Redirect the browser to Google's OAuth consent screen."""
+    redirect_uri = str(request.url_for("google_callback"))
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@router.get(
+    "/google/callback",
+    response_model=TokenResponse,
+    name="google_callback",
+    summary="Handle Google OAuth 2.0 callback and issue JWT tokens",
+)
+async def google_callback(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """Exchange Google authorization code for JWT access and refresh tokens."""
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"OAuth error: {exc}",
+        ) from exc
+
+    user_info_data = token.get("userinfo")
+    if not user_info_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No user info returned from Google",
+        )
+
+    try:
+        user_info = OAuthUserInfo.model_validate(user_info_data)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user info from Google",
+        ) from exc
+
+    service = AuthService(db)
+    try:
+        return await service.oauth_login("google", user_info.sub, str(user_info.email))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc

@@ -87,6 +87,42 @@ class AuthService:
         await self.db.commit()
         return tokens
 
+    async def oauth_login(
+        self, provider: str, sub: str, email: str
+    ) -> TokenResponse:
+        """Find or create a user from an OAuth provider callback."""
+        result = await self.db.execute(
+            select(User).where(User.oauth_sub == sub, User.oauth_provider == provider)
+        )
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            result = await self.db.execute(select(User).where(User.email == email))
+            user = result.scalar_one_or_none()
+
+            if user is None:
+                user = User(
+                    email=email,
+                    hashed_password=None,
+                    is_active=True,
+                    is_verified=True,
+                    oauth_provider=provider,
+                    oauth_sub=sub,
+                )
+                self.db.add(user)
+                await self.db.flush()
+            else:
+                user.oauth_provider = provider
+                user.oauth_sub = sub
+                user.is_verified = True
+
+        if not user.is_active:
+            raise ValueError("Account is inactive")
+
+        tokens = await self._issue_tokens(user)
+        await self.db.commit()
+        return tokens
+
     async def logout(self, refresh_token: str) -> None:
         result = await self.db.execute(
             select(RefreshToken).where(RefreshToken.token == refresh_token)
