@@ -13,7 +13,7 @@
 - [x] JWT auth: register, login, access + refresh token rotation (python-jose)
 - [x] Argon2 password hashing (`argon2-cffi`)
 - [x] OAuth 2.0 Google flow (authlib)
-- [ ] Rate limiting with `slowapi`
+- [x] Rate limiting with `slowapi`
 - [ ] Dependency injectors: `get_current_user`, `require_role`
 
 ## Phase 3 — API Design
