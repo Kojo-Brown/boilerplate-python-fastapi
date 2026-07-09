@@ -17,7 +17,7 @@
 - [x] Dependency injectors: `get_current_user`, `require_role`
 
 ## Phase 3 — API Design
-- [ ] Versioned router: `/api/v1/`
+- [x] Versioned router: `/api/v1/`
 - [ ] Generic `Page[T]` cursor pagination response model
 - [ ] Custom exception handler → consistent JSON errors
 - [ ] Request ID middleware + structured request logging
