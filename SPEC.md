@@ -18,7 +18,7 @@
 
 ## Phase 3 — API Design
 - [x] Versioned router: `/api/v1/`
-- [ ] Generic `Page[T]` cursor pagination response model
+- [x] Generic `Page[T]` cursor pagination response model
 - [ ] Custom exception handler → consistent JSON errors
 - [ ] Request ID middleware + structured request logging
 
