@@ -33,6 +33,6 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-from src.auth.router import router as auth_router  # noqa: E402
+from src.api.v1.router import v1_router  # noqa: E402
 
-app.include_router(auth_router)
+app.include_router(v1_router)
