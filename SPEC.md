@@ -19,7 +19,7 @@
 ## Phase 3 — API Design
 - [x] Versioned router: `/api/v1/`
 - [x] Generic `Page[T]` cursor pagination response model
-- [ ] Custom exception handler → consistent JSON errors
+- [x] Custom exception handler → consistent JSON errors
 - [ ] Request ID middleware + structured request logging
 
 ## Phase 4 — Data Layer
