@@ -18,6 +18,7 @@ from src.exception_handlers import (
 from src.exceptions import AppException
 from src.limiter import limiter
 from src.logging_config import configure_logging
+from src.middleware.request_id import RequestIDMiddleware
 
 
 @asynccontextmanager
@@ -39,6 +40,7 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # typ
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)  # type: ignore[arg-type]
 app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
+app.add_middleware(RequestIDMiddleware)
 
 
 @app.get("/health", tags=["health"])
