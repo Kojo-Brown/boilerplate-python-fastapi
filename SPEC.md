@@ -20,7 +20,7 @@
 - [x] Versioned router: `/api/v1/`
 - [x] Generic `Page[T]` cursor pagination response model
 - [x] Custom exception handler → consistent JSON errors
-- [ ] Request ID middleware + structured request logging
+- [x] Request ID middleware + structured request logging
 
 ## Phase 4 — Data Layer
 - [ ] Repository pattern: `BaseRepository[T]` with async SQLAlchemy
