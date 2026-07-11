@@ -23,7 +23,7 @@
 - [x] Request ID middleware + structured request logging
 
 ## Phase 4 — Data Layer
-- [ ] Repository pattern: `BaseRepository[T]` with async SQLAlchemy
+- [x] Repository pattern: `BaseRepository[T]` with async SQLAlchemy
 - [ ] Async background tasks with `asyncio` + FastAPI `BackgroundTasks`
 - [ ] Celery + Redis task queue example (email sending)
 - [ ] S3 file upload helper with presigned URLs (boto3)
