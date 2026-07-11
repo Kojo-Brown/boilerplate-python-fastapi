@@ -1,7 +1,6 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.schemas import RegisterRequest, TokenResponse, UserResponse
@@ -12,31 +11,29 @@ from src.auth.utils import (
     hash_password,
     verify_password,
 )
-from src.models.refresh_token import RefreshToken
 from src.models.user import User
+from src.repositories.refresh_token import RefreshTokenRepository
+from src.repositories.user import UserRepository
 
 
 class AuthService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+        self.users = UserRepository(db)
+        self.tokens = RefreshTokenRepository(db)
 
     async def register(self, data: RegisterRequest) -> UserResponse:
-        result = await self.db.execute(select(User).where(User.email == data.email))
-        if result.scalar_one_or_none() is not None:
+        if await self.users.exists_by_email(data.email):
             raise ValueError("Email already registered")
 
-        user = User(
+        user = await self.users.create(
             email=data.email,
             hashed_password=hash_password(data.password),
         )
-        self.db.add(user)
-        await self.db.commit()
-        await self.db.refresh(user)
         return UserResponse.model_validate(user)
 
     async def login(self, email: str, password: str) -> TokenResponse:
-        result = await self.db.execute(select(User).where(User.email == email))
-        user = result.scalar_one_or_none()
+        user = await self.users.get_by_email(email)
 
         if (
             user is None
@@ -61,11 +58,7 @@ class AuthService:
         if payload.get("type") != "refresh":
             raise ValueError("Invalid token type")
 
-        result = await self.db.execute(
-            select(RefreshToken).where(RefreshToken.token == refresh_token)
-        )
-        stored = result.scalar_one_or_none()
-
+        stored = await self.tokens.get_by_token(refresh_token)
         if stored is None or stored.revoked:
             raise ValueError("Refresh token is invalid or revoked")
 
@@ -78,8 +71,7 @@ class AuthService:
         stored.revoked = True
         await self.db.flush()
 
-        result = await self.db.execute(select(User).where(User.id == stored.user_id))
-        user = result.scalar_one_or_none()
+        user = await self.users.get(stored.user_id)
         if user is None or not user.is_active:
             raise ValueError("User not found or inactive")
 
@@ -91,17 +83,13 @@ class AuthService:
         self, provider: str, sub: str, email: str
     ) -> TokenResponse:
         """Find or create a user from an OAuth provider callback."""
-        result = await self.db.execute(
-            select(User).where(User.oauth_sub == sub, User.oauth_provider == provider)
-        )
-        user = result.scalar_one_or_none()
+        user = await self.users.get_by_oauth(provider, sub)
 
         if user is None:
-            result = await self.db.execute(select(User).where(User.email == email))
-            user = result.scalar_one_or_none()
+            user = await self.users.get_by_email(email)
 
             if user is None:
-                user = User(
+                user = await self.users.create(
                     email=email,
                     hashed_password=None,
                     is_active=True,
@@ -109,12 +97,11 @@ class AuthService:
                     oauth_provider=provider,
                     oauth_sub=sub,
                 )
-                self.db.add(user)
-                await self.db.flush()
             else:
                 user.oauth_provider = provider
                 user.oauth_sub = sub
                 user.is_verified = True
+                await self.db.flush()
 
         if not user.is_active:
             raise ValueError("Account is inactive")
@@ -124,13 +111,8 @@ class AuthService:
         return tokens
 
     async def logout(self, refresh_token: str) -> None:
-        result = await self.db.execute(
-            select(RefreshToken).where(RefreshToken.token == refresh_token)
-        )
-        stored = result.scalar_one_or_none()
-        if stored is not None:
-            stored.revoked = True
-            await self.db.commit()
+        await self.tokens.revoke(refresh_token)
+        await self.db.commit()
 
     async def _issue_tokens(self, user: User) -> TokenResponse:
         access_token = create_access_token(str(user.id), user.email, user.role)
@@ -138,13 +120,11 @@ class AuthService:
         jti = str(uuid.uuid4())
         refresh_token_str, expires_at = create_refresh_token(str(user.id), jti)
 
-        db_refresh = RefreshToken(
+        await self.tokens.create(
             token=refresh_token_str,
             user_id=user.id,
             expires_at=expires_at,
         )
-        self.db.add(db_refresh)
-        await self.db.flush()
 
         return TokenResponse(
             access_token=access_token,
