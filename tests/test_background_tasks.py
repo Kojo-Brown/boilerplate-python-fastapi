@@ -177,17 +177,17 @@ async def test_send_password_reset_email_includes_token() -> None:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI BackgroundTasks integration — register endpoint
+# Celery task queue integration — register endpoint
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_register_endpoint_schedules_welcome_email(
+async def test_register_endpoint_enqueues_welcome_email_task(
     async_client: object,
 ) -> None:
-    """The register endpoint should schedule send_welcome_email as a background task."""
+    """The register endpoint should enqueue a Celery send_welcome_email_task."""
     import uuid
-    from unittest.mock import patch as _patch
+    from unittest.mock import MagicMock, patch as _patch
 
     from src.auth.schemas import UserResponse
     from src.auth.service import AuthService
@@ -202,9 +202,7 @@ async def test_register_endpoint_schedules_welcome_email(
 
     with (
         _patch.object(AuthService, "register", new=AsyncMock(return_value=fake_user)),
-        _patch(
-            "src.tasks.email.send_email_with_retry", new=AsyncMock()
-        ) as mock_send,
+        _patch("src.tasks.celery_email._deliver_email_sync") as mock_deliver,
     ):
         from httpx import AsyncClient
 
@@ -216,7 +214,7 @@ async def test_register_endpoint_schedules_welcome_email(
 
     assert response.status_code == 201
     assert response.json()["email"] == "new@example.com"
-    # BackgroundTasks runs inline in HTTPX test transport
-    mock_send.assert_awaited_once()
-    delivered_msg: EmailMessage = mock_send.await_args[0][0]
+    # task_always_eager=True means the task runs inline; delivery should be called
+    mock_deliver.assert_called_once()
+    delivered_msg: EmailMessage = mock_deliver.call_args[0][0]
     assert delivered_msg.to == "new@example.com"

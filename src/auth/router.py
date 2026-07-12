@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ from src.auth.schemas import (
 from src.auth.service import AuthService
 from src.database import get_db
 from src.limiter import limiter
-from src.tasks import send_welcome_email
+from src.tasks import send_welcome_email_task
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -29,7 +29,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def register(
     request: Request,
     data: RegisterRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     service = AuthService(db)
@@ -39,7 +38,7 @@ async def register(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
-    background_tasks.add_task(send_welcome_email, user.email)
+    send_welcome_email_task.delay(user.email)
     return user
 
 
