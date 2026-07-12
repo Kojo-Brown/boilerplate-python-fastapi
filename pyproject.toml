@@ -20,6 +20,7 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "slowapi>=0.1.9",
     "celery[redis]>=5.5.0",
+    "boto3>=1.35.0",
 ]
 
 [build-system]
@@ -33,6 +34,7 @@ dev-dependencies = [
     "httpx>=0.28.0",
     "ruff>=0.11.0",
     "mypy>=1.17.0",
+    "boto3-stubs[s3]>=1.35.0",
 ]
 
 [tool.pytest.ini_options]
