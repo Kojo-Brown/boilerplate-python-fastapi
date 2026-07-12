@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     ARGON2_HASH_LEN: int = 32
     ARGON2_SALT_LEN: int = 16
 
+    # Redis (Celery broker + backend)
+    REDIS_URL: str = "redis://localhost:6379/0"
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

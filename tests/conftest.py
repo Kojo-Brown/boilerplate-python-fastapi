@@ -6,6 +6,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-minimum-32-characters-long!
 os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 os.environ.setdefault("REFRESH_TOKEN_EXPIRE_DAYS", "7")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -13,6 +14,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.database import get_db
 from src.main import app
+from src.worker import celery_app as _celery_app
+
+
+@pytest.fixture(autouse=True)
+def celery_eager() -> None:
+    """Run all Celery tasks synchronously and propagate exceptions in tests."""
+    _celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
 
 
 @pytest.fixture
