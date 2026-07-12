@@ -25,7 +25,7 @@
 ## Phase 4 — Data Layer
 - [x] Repository pattern: `BaseRepository[T]` with async SQLAlchemy
 - [x] Async background tasks with `asyncio` + FastAPI `BackgroundTasks`
-- [ ] Celery + Redis task queue example (email sending)
+- [x] Celery + Redis task queue example (email sending)
 - [ ] S3 file upload helper with presigned URLs (boto3)
 
 ## Phase 5 — Testing & DevOps
