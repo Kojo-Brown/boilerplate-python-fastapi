@@ -31,5 +31,12 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
 
+    # AWS S3
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-east-1"
+    AWS_S3_BUCKET: str = ""
+    AWS_S3_PRESIGNED_URL_EXPIRY: int = 3600
+
 
 settings = Settings()
