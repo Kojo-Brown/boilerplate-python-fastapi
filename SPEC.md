@@ -31,6 +31,6 @@
 ## Phase 5 — Testing & DevOps
 - [x] Pytest + HTTPX async test client
 - [x] Factory fixtures with `faker` + `pytest-factoryboy`
-- [ ] Coverage: 80% threshold
+- [x] Coverage: 80% threshold
 - [ ] GitHub Actions: lint (ruff) → typecheck (mypy) → test → Docker push
 - [ ] Multi-stage Dockerfile + docker-compose
