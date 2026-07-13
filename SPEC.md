@@ -29,7 +29,7 @@
 - [x] S3 file upload helper with presigned URLs (boto3)
 
 ## Phase 5 — Testing & DevOps
-- [ ] Pytest + HTTPX async test client
+- [x] Pytest + HTTPX async test client
 - [ ] Factory fixtures with `faker` + `pytest-factoryboy`
 - [ ] Coverage: 80% threshold
 - [ ] GitHub Actions: lint (ruff) → typecheck (mypy) → test → Docker push
