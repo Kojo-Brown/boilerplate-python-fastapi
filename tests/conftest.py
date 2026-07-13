@@ -14,6 +14,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pytest_factoryboy import register
 
 from src.auth.dependencies import get_current_user
 from src.auth.utils import create_access_token
@@ -21,6 +22,15 @@ from src.database import get_db
 from src.main import app
 from src.models.user import User
 from src.worker import celery_app as _celery_app
+from tests.factories import AdminUserFactory, RefreshTokenFactory, UserFactory
+
+# Register factories as pytest fixtures.
+# UserFactory      → fixtures: user_factory, user
+# AdminUserFactory → fixtures: admin_user_factory, admin_user
+# RefreshTokenFactory → fixtures: refresh_token_factory, refresh_token
+register(UserFactory)
+register(AdminUserFactory, "admin_user")
+register(RefreshTokenFactory)
 
 
 @pytest.fixture(autouse=True)
