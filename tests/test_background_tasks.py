@@ -3,7 +3,6 @@ import os
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-minimum-32-characters-long!")
 
 import pytest
 

@@ -5,7 +5,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-minimum-32-characters-long!")
 
 from src.database import get_db  # noqa: E402
 from src.limiter import limiter  # noqa: E402

@@ -2,7 +2,6 @@ import os
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-minimum-32-characters-long!")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import pytest

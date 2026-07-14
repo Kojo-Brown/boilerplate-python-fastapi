@@ -1,4 +1,5 @@
 import os
+import secrets
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -6,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
-os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "ci-placeholder-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", secrets.token_hex(16))
 
 from src.database import get_db  # noqa: E402
 from src.main import app  # noqa: E402
