@@ -1,4 +1,5 @@
 import os
+import secrets
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -6,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 # Must be set before any application imports so pydantic-settings can validate
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-minimum-32-characters-long!")
+os.environ.setdefault("SECRET_KEY", secrets.token_hex(32))
 os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 os.environ.setdefault("REFRESH_TOKEN_EXPIRE_DAYS", "7")

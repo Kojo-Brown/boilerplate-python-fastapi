@@ -1,0 +1,5 @@
+version: 2
+# Test files use programmatically generated ephemeral values, not real secrets.
+ignore-paths:
+  - tests/
+  - workflow-templates/
