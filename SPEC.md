@@ -32,5 +32,5 @@
 - [x] Pytest + HTTPX async test client
 - [x] Factory fixtures with `faker` + `pytest-factoryboy`
 - [x] Coverage: 80% threshold
-- [ ] GitHub Actions: lint (ruff) → typecheck (mypy) → test → Docker push
+- [x] GitHub Actions: lint (ruff) → typecheck (mypy) → test → Docker push
 - [ ] Multi-stage Dockerfile + docker-compose
