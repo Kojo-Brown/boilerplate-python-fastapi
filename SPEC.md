@@ -33,4 +33,4 @@
 - [x] Factory fixtures with `faker` + `pytest-factoryboy`
 - [x] Coverage: 80% threshold
 - [x] GitHub Actions: lint (ruff) → typecheck (mypy) → test → Docker push
-- [ ] Multi-stage Dockerfile + docker-compose
+- [x] Multi-stage Dockerfile + docker-compose
