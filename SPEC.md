@@ -2,6 +2,12 @@
 
 > Spec-driven. Mark `[x]` only after pushing.
 
+## Phase 0 — Green Baseline (blocks all feature work)
+- [ ] Verify every pinned version exists on PyPI, then commit a resolved `uv.lock`
+- [ ] Get `uv sync`, `ruff check`, `mypy`, and `pytest` all passing locally from a clean clone
+- [ ] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
+- [ ] Confirm the app imports and starts against a real Postgres in CI
+
 ## Phase 1 — Foundation
 - [x] FastAPI 0.138 + Python 3.14 project with `uv` package manager
 - [x] Pydantic v2 settings with `.env` validation
@@ -34,3 +40,54 @@
 - [x] Coverage: 80% threshold
 - [x] GitHub Actions: lint (ruff) → typecheck (mypy) → test → Docker push
 - [x] Multi-stage Dockerfile + docker-compose
+
+## Phase 6 — SOLID & Design Patterns
+- [ ] SOLID audit with before/after refactors documented in `docs/solid.md`
+- [ ] Factory pattern: `StorageFactory` returning S3/local/memory backends via `Protocol`
+- [ ] Strategy pattern: pluggable `NotificationStrategy` chosen per user preference
+- [ ] Decorator pattern: `@cached`, `@retry`, `@timed` decorators preserving signatures via `ParamSpec`
+- [ ] Observer pattern: async domain event bus with typed subscribers
+- [ ] Adapter pattern: `PaymentGateway` protocol with two concrete adapters
+- [ ] Dependency inversion via FastAPI `Depends` + protocol-typed providers, overridable in tests
+
+## Phase 7 — Concurrency & Data Integrity
+- [ ] Idempotency middleware: `Idempotency-Key` + Redis dedupe with response replay
+- [ ] Optimistic concurrency: SQLAlchemy `version_id_col` + `If-Match`/ETag, 412 on conflict
+- [ ] Pessimistic locking with `with_for_update()` and a deadlock-retry wrapper
+- [ ] Distributed lock via Redis with fencing tokens, exposed as an async context manager
+- [ ] GIL-bound work offloaded to `ProcessPoolExecutor`; IO-bound to `asyncio.gather` with semaphores
+- [ ] Immutability: frozen Pydantic models, `Final`, and frozen dataclasses for value objects
+- [ ] Transactional outbox: event row in the same session, async relay publisher
+- [ ] `asyncio` structured concurrency: TaskGroup, cancellation, and timeout patterns
+
+## Phase 8 — Streaming & Messaging
+- [ ] `StreamingResponse` for large exports with backpressure-aware async generators
+- [ ] Server-Sent Events endpoint with heartbeat and client disconnect detection
+- [ ] WebSocket endpoint with JWT auth, rooms, and per-connection rate limiting
+- [ ] Kafka producer/consumer (aiokafka) with consumer groups and manual commits
+- [ ] Dead-letter queue with an exponential-backoff retry ladder
+- [ ] Redis Streams consumer group with stalled-message claiming
+
+## Phase 9 — Resilience & Observability
+- [ ] Circuit breaker + retry with jitter on outbound httpx calls
+- [ ] Bulkhead semaphores per dependency with hard timeouts
+- [ ] OpenTelemetry traces/metrics/logs with W3C context propagation
+- [ ] Prometheus RED metrics + a checked-in Grafana dashboard
+- [ ] Liveness vs readiness probes with real dependency checks
+- [ ] N+1 detection in tests + `selectinload`/`joinedload` tuning guide
+
+## Phase 10 — Security Hardening
+- [ ] Security headers middleware: CSP, HSTS, `X-Content-Type-Options`, referrer policy
+- [ ] Refresh-token reuse detection with family revocation
+- [ ] Field-level encryption at rest (AES-256-GCM) via a SQLAlchemy TypeDecorator
+- [ ] PII redaction processor in the structlog pipeline
+- [ ] HMAC-signed webhooks with constant-time compare and replay windows
+- [ ] OWASP API Top 10 checklist with a test per mitigation
+- [ ] Multi-tenancy with PostgreSQL row-level security and a tenant-scoped session
+
+## Phase 11 — TDD & Advanced Testing
+- [ ] TDD kata: one feature built red→green→refactor, one commit per step
+- [ ] Mutation testing with `mutmut` + a CI threshold
+- [ ] Property-based tests with Hypothesis for serializers and pagination
+- [ ] Testcontainers-backed integration tests against real Postgres + Redis
+- [ ] Locust load test with a latency budget asserted in CI
