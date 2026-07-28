@@ -3,9 +3,9 @@
 > Spec-driven. Mark `[x]` only after pushing.
 
 ## Phase 0 — Green Baseline (blocks all feature work)
-- [ ] Verify every pinned version exists on PyPI, then commit a resolved `uv.lock`
-- [ ] Get `uv sync`, `ruff check`, `mypy`, and `pytest` all passing locally from a clean clone
-- [ ] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
+- [x] Verify every pinned version exists on PyPI, then commit a resolved `uv.lock`
+- [x] Get `uv sync`, `ruff check`, `mypy`, and `pytest` all passing locally from a clean clone
+- [x] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
 - [ ] Confirm the app imports and starts against a real Postgres in CI
 
 ## Phase 1 — Foundation
