@@ -1,6 +1,6 @@
 import asyncio
 import os
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, call, patch
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
 
@@ -12,7 +12,6 @@ from src.tasks.email import (
     send_password_reset_email,
     send_welcome_email,
 )
-
 
 # ---------------------------------------------------------------------------
 # EmailMessage
@@ -186,7 +185,7 @@ async def test_register_endpoint_enqueues_welcome_email_task(
 ) -> None:
     """The register endpoint should enqueue a Celery send_welcome_email_task."""
     import uuid
-    from unittest.mock import MagicMock, patch as _patch
+    from unittest.mock import patch as _patch
 
     from src.auth.schemas import UserResponse
     from src.auth.service import AuthService

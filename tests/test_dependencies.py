@@ -117,7 +117,7 @@ async def test_get_current_user_inactive_raises_403() -> None:
 
 @pytest.mark.asyncio
 async def test_require_role_allowed() -> None:
-    from src.auth.dependencies import require_role
+    from src.auth.dependencies import get_current_user, require_role
 
     user = _make_user(role="admin")
     token = create_access_token(str(user.id), user.email, user.role)
@@ -128,14 +128,17 @@ async def test_require_role_allowed() -> None:
     db = AsyncMock()
     db.execute = AsyncMock(return_value=result_mock)
 
+    # require_role guards an already-authenticated user; FastAPI resolves that
+    # user via Depends(get_current_user), so do the same explicitly here.
+    current = await get_current_user(credentials=credentials, db=db)
     dep = require_role("admin", "superuser")
-    found = await dep(credentials=credentials, db=db)
+    found = await dep(current_user=current)
     assert found is user
 
 
 @pytest.mark.asyncio
 async def test_require_role_denied_raises_403() -> None:
-    from src.auth.dependencies import require_role
+    from src.auth.dependencies import get_current_user, require_role
 
     user = _make_user(role="user")
     token = create_access_token(str(user.id), user.email, user.role)
@@ -146,9 +149,10 @@ async def test_require_role_denied_raises_403() -> None:
     db = AsyncMock()
     db.execute = AsyncMock(return_value=result_mock)
 
+    current = await get_current_user(credentials=credentials, db=db)
     dep = require_role("admin")
     with pytest.raises(HTTPException) as exc_info:
-        await dep(credentials=credentials, db=db)
+        await dep(current_user=current)
 
     assert exc_info.value.status_code == 403
     assert "insufficient permissions" in exc_info.value.detail.lower()
@@ -156,7 +160,7 @@ async def test_require_role_denied_raises_403() -> None:
 
 @pytest.mark.asyncio
 async def test_require_role_multiple_allowed_roles() -> None:
-    from src.auth.dependencies import require_role
+    from src.auth.dependencies import get_current_user, require_role
 
     for role in ("editor", "moderator"):
         user = _make_user(role=role)
@@ -168,6 +172,7 @@ async def test_require_role_multiple_allowed_roles() -> None:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result_mock)
 
+        current = await get_current_user(credentials=credentials, db=db)
         dep = require_role("editor", "moderator", "admin")
-        found = await dep(credentials=credentials, db=db)
+        found = await dep(current_user=current)
         assert found.role == role

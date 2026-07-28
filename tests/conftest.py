@@ -16,6 +16,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pytest_factoryboy import register
+from sqlalchemy import DateTime, inspect
 
 from src.auth.dependencies import get_current_user
 from src.auth.utils import create_access_token
@@ -40,20 +41,64 @@ def celery_eager() -> None:
     _celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
 
 
+def apply_column_defaults(instance: object) -> None:
+    """Populate unset columns the way a real INSERT flush would.
+
+    SQLAlchemy resolves ``default=`` and ``server_default=`` at flush time, not at
+    construction time. A bare ``AsyncMock`` session never flushes, so freshly
+    constructed models keep ``None`` for ``id``, ``role``, ``is_active`` and the
+    timestamps — which then fails response-model validation for reasons that have
+    nothing to do with the code under test. Applying the defaults here keeps the
+    stub faithful to the real session.
+    """
+    mapper = inspect(type(instance)).mapper
+
+    for column in mapper.columns:
+        key = mapper.get_property_by_column(column).key
+        if getattr(instance, key, None) is not None:
+            continue
+
+        default = column.default
+        if default is not None:
+            if default.is_callable:
+                setattr(instance, key, default.arg({}))
+            elif default.is_scalar:
+                setattr(instance, key, default.arg)
+        elif column.server_default is not None and isinstance(column.type, DateTime):
+            setattr(instance, key, datetime.now(UTC))
+
+
 @pytest.fixture
 def mock_db() -> AsyncMock:
-    """In-memory async SQLAlchemy session stub."""
+    """In-memory async SQLAlchemy session stub.
+
+    Tracks pending instances so ``flush()``/``refresh()`` can populate column
+    defaults, mirroring the behaviour handlers rely on after ``repo.create()``.
+    """
     session = AsyncMock()
-    session.add = MagicMock()
+    pending: list[object] = []
+
+    def _add(instance: object) -> None:
+        pending.append(instance)
+
+    async def _flush(*_args: object, **_kwargs: object) -> None:
+        for instance in pending:
+            apply_column_defaults(instance)
+
+    async def _refresh(instance: object, *_args: object, **_kwargs: object) -> None:
+        apply_column_defaults(instance)
+
+    session.add = MagicMock(side_effect=_add)
     session.commit = AsyncMock()
-    session.flush = AsyncMock()
-    session.refresh = AsyncMock()
+    session.flush = AsyncMock(side_effect=_flush)
+    session.refresh = AsyncMock(side_effect=_refresh)
     return session
 
 
 @pytest.fixture
 async def async_client(mock_db: AsyncMock) -> AsyncGenerator[AsyncClient, None]:
     """Unauthenticated HTTPX async client wired to the FastAPI app via ASGITransport."""
+
     async def _override_db() -> AsyncGenerator[AsyncMock, None]:
         yield mock_db
 
@@ -107,9 +152,7 @@ def auth_headers(mock_user: User) -> dict[str, str]:
 @pytest.fixture
 def admin_headers(mock_admin: User) -> dict[str, str]:
     """Bearer token header for an admin user."""
-    token = create_access_token(
-        str(mock_admin.id), mock_admin.email, mock_admin.role
-    )
+    token = create_access_token(str(mock_admin.id), mock_admin.email, mock_admin.role)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -119,7 +162,8 @@ async def authenticated_client(
     mock_user: User,
     auth_headers: dict[str, str],
 ) -> AsyncGenerator[AsyncClient, None]:
-    """HTTPX client pre-configured with a valid user JWT and get_current_user override."""
+    """HTTPX client carrying a valid user JWT plus a get_current_user override."""
+
     async def _override_db() -> AsyncGenerator[AsyncMock, None]:
         yield mock_db
 
@@ -146,6 +190,7 @@ async def admin_client(
     admin_headers: dict[str, str],
 ) -> AsyncGenerator[AsyncClient, None]:
     """HTTPX client pre-configured with an admin JWT and get_current_user override."""
+
     async def _override_db() -> AsyncGenerator[AsyncMock, None]:
         yield mock_db
 

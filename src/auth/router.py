@@ -109,7 +109,10 @@ async def logout(
 async def google_login(request: Request) -> RedirectResponse:
     """Redirect the browser to Google's OAuth consent screen."""
     redirect_uri = str(request.url_for("google_callback"))
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    response: RedirectResponse = await oauth.google.authorize_redirect(
+        request, redirect_uri
+    )
+    return response
 
 
 @router.get(

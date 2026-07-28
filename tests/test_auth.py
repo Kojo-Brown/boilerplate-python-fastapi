@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,7 +12,7 @@ from src.auth.utils import (
     hash_password,
     verify_password,
 )
-
+from tests.conftest import apply_column_defaults
 
 # --- Utility tests (no DB needed) ---
 
@@ -95,32 +95,20 @@ async def test_auth_service_register_success() -> None:
     result_mock.scalar_one_or_none.return_value = None
     db.execute = AsyncMock(return_value=result_mock)
 
-    user_instance = User(
-        id=uuid.uuid4(),
-        email="new@example.com",
-        hashed_password="hashed",
-        is_active=True,
-        is_verified=False,
-        role="user",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-    db.refresh = AsyncMock(side_effect=lambda u: None)
     db.add = MagicMock()
     db.commit = AsyncMock()
 
-    # After commit+refresh, the user object should have correct values
+    # A real flush/refresh resolves the model's column defaults; the stub session
+    # has to do the same or the response model sees None for id/role/is_active.
+    async def fake_refresh(obj: object, *_a: object, **_kw: object) -> None:
+        if isinstance(obj, User):
+            apply_column_defaults(obj)
+
+    db.flush = AsyncMock()
+    db.refresh = AsyncMock(side_effect=fake_refresh)
+
     service = AuthService(db)
     data = RegisterRequest(email="new@example.com", password="password123")
-
-    # Patch refresh to populate user attributes from user_instance
-    async def fake_refresh(obj: object) -> None:
-        if isinstance(obj, User):
-            obj.id = user_instance.id
-            obj.created_at = user_instance.created_at
-            obj.updated_at = user_instance.updated_at
-
-    db.refresh = AsyncMock(side_effect=fake_refresh)
 
     response = await service.register(data)
     assert response.email == "new@example.com"

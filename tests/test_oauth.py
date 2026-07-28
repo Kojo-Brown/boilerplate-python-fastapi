@@ -14,7 +14,6 @@ from src.database import get_db  # noqa: E402
 from src.main import app  # noqa: E402
 from src.models.user import User  # noqa: E402
 
-
 # --- Service tests ---
 
 
@@ -151,7 +150,7 @@ async def test_google_login_initiates_redirect(async_client: AsyncClient) -> Non
 
     with patch("src.auth.router.oauth") as mock_oauth:
         mock_oauth.google.authorize_redirect = AsyncMock(return_value=mock_redirect)
-        response = await async_client.get("/auth/google", follow_redirects=False)
+        response = await async_client.get("/api/v1/auth/google", follow_redirects=False)
 
     assert response.status_code in {301, 302, 303, 307, 308}
 
@@ -189,7 +188,7 @@ async def test_google_callback_returns_tokens() -> None:
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
-                response = await client.get("/auth/google/callback")
+                response = await client.get("/api/v1/auth/google/callback")
     finally:
         app.dependency_overrides.clear()
 
@@ -218,9 +217,9 @@ async def test_google_callback_oauth_error_returns_400() -> None:
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
-                response = await client.get("/auth/google/callback")
+                response = await client.get("/api/v1/auth/google/callback")
     finally:
         app.dependency_overrides.clear()
 
     assert response.status_code == 400
-    assert "OAuth error" in response.json()["detail"]
+    assert "OAuth error" in response.json()["message"]

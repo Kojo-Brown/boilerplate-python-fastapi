@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import CursorResult, and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.refresh_token import RefreshToken
@@ -46,8 +46,10 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
     async def delete_expired(self) -> int:
         """Hard-delete all expired tokens. Returns the count deleted."""
         now = datetime.now(UTC)
-        result = await self.session.execute(
+        # A DELETE always yields a CursorResult, which is what carries rowcount;
+        # execute() is only typed as the broader Result.
+        result: CursorResult[object] = await self.session.execute(  # type: ignore[assignment]
             delete(RefreshToken).where(RefreshToken.expires_at < now)
         )
         await self.session.flush()
-        return result.rowcount  # type: ignore[return-value]
+        return result.rowcount

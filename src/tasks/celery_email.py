@@ -19,8 +19,10 @@ Usage:
     )
 """
 
+from typing import Any
+
 import structlog
-from celery import Task
+from celery import Task  # Task is generic in the type stubs only, never at runtime
 
 from src.tasks.email import EmailMessage
 from src.worker import celery_app
@@ -43,7 +45,7 @@ def _deliver_email_sync(message: EmailMessage) -> None:
     retry_jitter=False,
 )
 def send_welcome_email_task(
-    self: Task,
+    self: "Task[Any, Any]",
     to: str,
     username: str | None = None,
 ) -> dict[str, str]:
@@ -82,7 +84,7 @@ def send_welcome_email_task(
     retry_jitter=False,
 )
 def send_password_reset_email_task(
-    self: Task,
+    self: "Task[Any, Any]",
     to: str,
     reset_token: str,
 ) -> dict[str, str]:

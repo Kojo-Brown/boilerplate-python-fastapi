@@ -1,15 +1,13 @@
 import uuid
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import Base
 
-ModelT = TypeVar("ModelT", bound=Base)
 
-
-class BaseRepository(Generic[ModelT]):
+class BaseRepository[ModelT: Base]:
     """Generic async repository providing standard CRUD operations.
 
     Subclasses must call ``super().__init__(session, ModelClass)`` to register
@@ -27,9 +25,7 @@ class BaseRepository(Generic[ModelT]):
     async def get_by(self, **kwargs: Any) -> ModelT | None:
         """Fetch a single row matching ALL keyword-argument field=value filters."""
         conditions = [getattr(self._model, k) == v for k, v in kwargs.items()]
-        result = await self.session.execute(
-            select(self._model).where(*conditions)
-        )
+        result = await self.session.execute(select(self._model).where(*conditions))
         return result.scalar_one_or_none()
 
     async def list(
@@ -37,7 +33,11 @@ class BaseRepository(Generic[ModelT]):
         limit: int = 20,
         offset: int = 0,
     ) -> list[ModelT]:
-        """Return a page of rows ordered by insertion (no guaranteed order beyond DB default)."""
+        """Return a page of rows.
+
+        Ordering is whatever the database returns; callers that need a stable
+        order must add one themselves.
+        """
         result = await self.session.execute(
             select(self._model).limit(limit).offset(offset)
         )

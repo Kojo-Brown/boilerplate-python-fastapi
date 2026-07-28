@@ -102,8 +102,7 @@ async def send_welcome_email(to: str, *, username: str | None = None) -> None:
         subject="Welcome to the platform",
         body=f"Hi {name},\n\nWelcome! Your account is ready.",
         html_body=(
-            f"<p>Hi <strong>{name}</strong>,</p>"
-            "<p>Welcome! Your account is ready.</p>"
+            f"<p>Hi <strong>{name}</strong>,</p><p>Welcome! Your account is ready.</p>"
         ),
     )
     await send_email_with_retry(message)
