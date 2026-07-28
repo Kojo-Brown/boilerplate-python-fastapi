@@ -1,41 +1,13 @@
-import os
+"""Every route must be reachable under the /api/v1 prefix and nowhere else.
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
-os.environ.setdefault("ALGORITHM", "HS256")
-os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
-os.environ.setdefault("REFRESH_TOKEN_EXPIRE_DAYS", "7")
+Session/client fixtures come from ``tests/conftest.py``; this module deliberately
+does not redefine them, so the stub session behaves identically everywhere.
+"""
 
-import pytest
-from httpx import ASGITransport, AsyncClient
 from unittest.mock import AsyncMock, MagicMock
 
-from src.database import get_db
-from src.main import app
-
-
-@pytest.fixture
-def mock_db() -> AsyncMock:
-    session = AsyncMock()
-    session.add = MagicMock()
-    session.commit = AsyncMock()
-    session.flush = AsyncMock()
-    session.refresh = AsyncMock()
-    return session
-
-
-@pytest.fixture
-async def async_client(mock_db: AsyncMock) -> AsyncClient:
-    async def override_get_db():
-        yield mock_db
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        yield client
-
-    app.dependency_overrides.clear()
+import pytest
+from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
@@ -62,7 +34,13 @@ async def test_auth_register_mounted_under_api_v1(
 
 
 @pytest.mark.asyncio
-async def test_auth_login_mounted_under_api_v1(async_client: AsyncClient) -> None:
+async def test_auth_login_mounted_under_api_v1(
+    async_client: AsyncClient, mock_db: AsyncMock
+) -> None:
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(return_value=result_mock)
+
     response = await async_client.post(
         "/api/v1/auth/login",
         json={"email": "nobody@example.com", "password": "wrong"},

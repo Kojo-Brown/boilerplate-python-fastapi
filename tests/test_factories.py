@@ -18,7 +18,6 @@ from src.models.refresh_token import RefreshToken
 from src.models.user import User
 from tests.factories import AdminUserFactory, RefreshTokenFactory, UserFactory
 
-
 # ---------------------------------------------------------------------------
 # Direct factory build
 # ---------------------------------------------------------------------------

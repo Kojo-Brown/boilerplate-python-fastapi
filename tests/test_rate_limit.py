@@ -55,7 +55,7 @@ async def test_login_rate_limit_allows_requests_under_limit(
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     payload = {"email": "user@example.com", "password": "wrongpassword"}
-    response = await async_client.post("/auth/login", json=payload)
+    response = await async_client.post("/api/v1/auth/login", json=payload)
     # 401 means the route was reached (credentials rejected, not rate-limited)
     assert response.status_code == 401
 
@@ -73,11 +73,11 @@ async def test_login_rate_limit_returns_429_after_limit(
 
     # Send 5 requests (at the limit)
     for _ in range(5):
-        response = await async_client.post("/auth/login", json=payload)
+        response = await async_client.post("/api/v1/auth/login", json=payload)
         assert response.status_code in {200, 401, 400}
 
     # The 6th request should be rate-limited
-    response = await async_client.post("/auth/login", json=payload)
+    response = await async_client.post("/api/v1/auth/login", json=payload)
     assert response.status_code == 429
 
 
@@ -93,10 +93,10 @@ async def test_register_rate_limit_returns_429_after_limit(
     payload = {"email": "new@example.com", "password": "password123"}
 
     for _ in range(5):
-        response = await async_client.post("/auth/register", json=payload)
+        response = await async_client.post("/api/v1/auth/register", json=payload)
         assert response.status_code in {200, 201, 400, 422}
 
-    response = await async_client.post("/auth/register", json=payload)
+    response = await async_client.post("/api/v1/auth/register", json=payload)
     assert response.status_code == 429
 
 
@@ -112,10 +112,10 @@ async def test_refresh_rate_limit_allows_10_per_minute(
     payload = {"refresh_token": "invalid.token.here"}
 
     for _ in range(10):
-        response = await async_client.post("/auth/refresh", json=payload)
+        response = await async_client.post("/api/v1/auth/refresh", json=payload)
         assert response.status_code in {200, 401}
 
-    response = await async_client.post("/auth/refresh", json=payload)
+    response = await async_client.post("/api/v1/auth/refresh", json=payload)
     assert response.status_code == 429
 
 
@@ -131,9 +131,9 @@ async def test_rate_limit_response_has_retry_after_header(
     payload = {"email": "user@example.com", "password": "wrongpassword"}
 
     for _ in range(5):
-        await async_client.post("/auth/login", json=payload)
+        await async_client.post("/api/v1/auth/login", json=payload)
 
-    response = await async_client.post("/auth/login", json=payload)
+    response = await async_client.post("/api/v1/auth/login", json=payload)
     assert response.status_code == 429
     assert "Retry-After" in response.headers or "retry-after" in response.headers
 

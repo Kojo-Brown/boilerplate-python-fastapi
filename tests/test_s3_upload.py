@@ -20,7 +20,6 @@ from src.storage.schemas import (
     PresignedUploadResponse,
 )
 
-
 # --- _build_object_key ---
 
 
@@ -28,7 +27,7 @@ def test_build_object_key_includes_extension() -> None:
     key = _build_object_key("uploads", "photo.jpg")
     assert key.startswith("uploads/")
     assert key.endswith(".jpg")
-    uuid_part = key[len("uploads/"):].rsplit(".", 1)[0]
+    uuid_part = key[len("uploads/") :].rsplit(".", 1)[0]
     assert len(uuid_part) == 36
 
 
@@ -39,7 +38,9 @@ def test_build_object_key_without_extension() -> None:
 
 
 def test_build_object_key_is_unique() -> None:
-    assert _build_object_key("uploads", "same.jpg") != _build_object_key("uploads", "same.jpg")
+    first = _build_object_key("uploads", "same.jpg")
+    second = _build_object_key("uploads", "same.jpg")
+    assert first != second
 
 
 # --- generate_presigned_upload ---
@@ -80,7 +81,9 @@ def test_generate_presigned_upload_success(mock_get_client: MagicMock) -> None:
 
 
 @patch("src.storage.s3._get_s3_client")
-def test_generate_presigned_upload_uses_default_expiry(mock_get_client: MagicMock) -> None:
+def test_generate_presigned_upload_uses_default_expiry(
+    mock_get_client: MagicMock,
+) -> None:
     from src.config import settings
 
     mock_client = MagicMock()
@@ -125,7 +128,9 @@ def test_generate_presigned_upload_client_error_raises_storage_error(
 def test_generate_presigned_download_success(mock_get_client: MagicMock) -> None:
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
-    mock_client.generate_presigned_url.return_value = "https://s3.example.com/file?sig=abc"
+    mock_client.generate_presigned_url.return_value = (
+        "https://s3.example.com/file?sig=abc"
+    )
 
     result = generate_presigned_download(key="uploads/abc.jpg", expiry=300)
 

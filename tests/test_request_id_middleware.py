@@ -17,7 +17,9 @@ async def client() -> AsyncClient:
 
 
 class TestRequestIDMiddleware:
-    async def test_response_contains_request_id_header(self, client: AsyncClient) -> None:
+    async def test_response_contains_request_id_header(
+        self, client: AsyncClient
+    ) -> None:
         response = await client.get("/health")
         assert REQUEST_ID_HEADER in response.headers
         header_value = response.headers[REQUEST_ID_HEADER]
@@ -64,7 +66,7 @@ class TestRequestIDMiddleware:
         self, client: AsyncClient
     ) -> None:
         response = await client.get("/health")
-        # httpx normalises header names; verify the header exists via case-insensitive lookup
+        # httpx normalises header names, so look the header up case-insensitively
         assert response.headers.get("x-request-id") is not None
 
     async def test_error_response_also_carries_request_id(
@@ -73,9 +75,7 @@ class TestRequestIDMiddleware:
         response = await client.get("/api/v1/nonexistent-route-404")
         assert REQUEST_ID_HEADER in response.headers
 
-    async def test_custom_id_survives_error_response(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_custom_id_survives_error_response(self, client: AsyncClient) -> None:
         custom_id = str(uuid.uuid4())
         response = await client.get(
             "/api/v1/nonexistent-404",

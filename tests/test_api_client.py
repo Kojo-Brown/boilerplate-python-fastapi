@@ -17,6 +17,7 @@ Fixtures are defined in conftest.py and shared across all test modules:
   mock_user / mock_admin – ready-made User ORM objects
   auth_headers / admin_headers – raw {"Authorization": "Bearer ..."} dicts
 """
+
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -28,7 +29,6 @@ from src.auth.password import hash_password
 from src.auth.utils import create_refresh_token
 from src.models.refresh_token import RefreshToken
 from src.models.user import User
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -125,7 +125,8 @@ async def test_register_duplicate_email_returns_400(
     )
 
     assert response.status_code == 400
-    assert "already registered" in response.json()["detail"]
+    # Errors go through the custom handler, which emits {error, message, status}
+    assert "already registered" in response.json()["message"]
 
 
 @pytest.mark.asyncio
@@ -162,7 +163,7 @@ async def test_register_missing_body_returns_422(
 
 
 @pytest.mark.asyncio
-async def test_register_validation_error_body_has_detail(
+async def test_register_validation_error_body_lists_field_errors(
     async_client: AsyncClient,
 ) -> None:
     response = await async_client.post(
@@ -171,7 +172,9 @@ async def test_register_validation_error_body_has_detail(
     )
 
     assert response.status_code == 422
-    assert "detail" in response.json()
+    body = response.json()
+    assert body["error"] == "VALIDATION_ERROR"
+    assert {d["field"] for d in body["details"]} == {"email", "password"}
 
 
 # ── Login ─────────────────────────────────────────────────────────────────────
@@ -351,7 +354,7 @@ async def test_logout_missing_field_returns_422(
 
 
 @pytest.mark.asyncio
-async def test_protected_upload_without_token_returns_403(
+async def test_protected_upload_without_token_returns_401(
     async_client: AsyncClient,
 ) -> None:
     response = await async_client.post(
@@ -362,8 +365,9 @@ async def test_protected_upload_without_token_returns_403(
             "content_type": "image/jpeg",
         },
     )
-    # HTTPBearer returns 403 when the Authorization header is absent
-    assert response.status_code == 403
+    # HTTPBearer returns 401 + WWW-Authenticate when the header is absent
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
 
 
 @pytest.mark.asyncio

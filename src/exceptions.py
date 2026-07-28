@@ -56,7 +56,7 @@ class ConflictError(AppException):
 
 
 class UnprocessableEntityError(AppException):
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "UNPROCESSABLE_ENTITY"
 
     def __init__(

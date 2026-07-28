@@ -1,13 +1,10 @@
 import base64
 from collections.abc import Callable
-from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
-T = TypeVar("T")
 
-
-class CursorPage(BaseModel, Generic[T]):
+class CursorPage[T](BaseModel):
     """Generic cursor-paginated response envelope."""
 
     items: list[T]
@@ -32,7 +29,7 @@ def decode_cursor(cursor: str) -> str:
     return base64.urlsafe_b64decode(cursor.encode()).decode()
 
 
-def build_page(
+def build_page[T](
     items: list[T],
     limit: int,
     get_cursor: Callable[[T], str],

@@ -2,15 +2,13 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.repositories.base import BaseRepository
 from src.repositories.refresh_token import RefreshTokenRepository
 from src.repositories.user import UserRepository
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -149,26 +147,17 @@ class TestBaseRepository:
         from src.models.user import User
 
         session = _make_session()
-        created = _make_user(email="new@x.com")
+        repo: BaseRepository[User] = BaseRepository(session, User)
 
-        with patch.object(User, "__init__", return_value=None) as mock_init:
-            instance = MagicMock(spec=User)
-            with patch("src.repositories.base.BaseRepository._model", User, create=True):
-                pass  # just verifying patch works
+        result = await repo.create(email="new@x.com", hashed_password="hashed")
 
-        # Simpler: test via UserRepository
-        repo: BaseRepository[Any] = BaseRepository(session, User)
-        # Patch User(...) constructor to return our mock
-        with patch("src.repositories.base.BaseRepository._model") as MockModel:
-            MockModel.return_value = created
-            MockModel.__name__ = "User"
-            repo._model = MockModel  # type: ignore[assignment]
-            result = await repo.create(email="new@x.com")
-
-        session.add.assert_called_once_with(created)
-        session.flush.assert_awaited()
-        session.refresh.assert_awaited_with(created)
-        assert result is created
+        # create() constructs the model, stages it, then flushes and refreshes
+        # so server-side defaults are readable by the caller.
+        assert isinstance(result, User)
+        assert result.email == "new@x.com"
+        session.add.assert_called_once_with(result)
+        session.flush.assert_awaited_once()
+        session.refresh.assert_awaited_once_with(result)
 
     @pytest.mark.asyncio
     async def test_update_modifies_and_returns_instance(self) -> None:

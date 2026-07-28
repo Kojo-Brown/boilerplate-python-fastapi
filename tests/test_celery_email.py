@@ -1,10 +1,11 @@
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import pytest
+from celery.exceptions import Retry
 
 from src.tasks.celery_email import (
     _deliver_email_sync,
@@ -12,7 +13,6 @@ from src.tasks.celery_email import (
     send_welcome_email_task,
 )
 from src.tasks.email import EmailMessage
-
 
 # ---------------------------------------------------------------------------
 # _deliver_email_sync
@@ -58,7 +58,9 @@ def test_send_welcome_email_task_uses_provided_username() -> None:
         captured.append(msg)
 
     with patch("src.tasks.celery_email._deliver_email_sync", side_effect=fake_deliver):
-        send_welcome_email_task.apply(args=["user@example.com"], kwargs={"username": "Alice"})
+        send_welcome_email_task.apply(
+            args=["user@example.com"], kwargs={"username": "Alice"}
+        )
 
     msg = captured[0]
     assert "Alice" in msg.body
@@ -121,26 +123,44 @@ def test_send_password_reset_email_task_html_body_not_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Retry behaviour (task_eager_propagates=True means exceptions surface)
+# Retry behaviour
+#
+# Both tasks declare autoretry_for=(Exception,), so a delivery failure is turned
+# into a retry request rather than propagating the original exception. Celery
+# signals that by raising Retry with the triggering error attached as `.exc`.
 # ---------------------------------------------------------------------------
 
 
-def test_send_welcome_email_task_propagates_delivery_error() -> None:
+def test_send_welcome_email_task_retries_on_delivery_error() -> None:
     with patch(
         "src.tasks.celery_email._deliver_email_sync",
         side_effect=RuntimeError("smtp down"),
     ):
-        with pytest.raises(RuntimeError, match="smtp down"):
+        with pytest.raises(Retry) as exc_info:
             send_welcome_email_task.apply(args=["user@example.com"])
 
+    cause = exc_info.value.exc
+    assert isinstance(cause, RuntimeError)
+    assert str(cause) == "smtp down"
 
-def test_send_password_reset_email_task_propagates_delivery_error() -> None:
+
+def test_send_password_reset_email_task_retries_on_delivery_error() -> None:
     with patch(
         "src.tasks.celery_email._deliver_email_sync",
         side_effect=RuntimeError("smtp down"),
     ):
-        with pytest.raises(RuntimeError, match="smtp down"):
+        with pytest.raises(Retry) as exc_info:
             send_password_reset_email_task.apply(args=["user@example.com", "tok-x"])
+
+    cause = exc_info.value.exc
+    assert isinstance(cause, RuntimeError)
+    assert str(cause) == "smtp down"
+
+
+def test_email_tasks_are_configured_to_retry() -> None:
+    for task in (send_welcome_email_task, send_password_reset_email_task):
+        assert task.max_retries == 3
+        assert task.retry_backoff is True
 
 
 # ---------------------------------------------------------------------------

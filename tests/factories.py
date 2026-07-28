@@ -55,9 +55,7 @@ class RefreshTokenFactory(factory.Factory):
     id = factory.LazyFunction(uuid.uuid4)
     token = factory.LazyFunction(lambda: _fake.sha256())
     user_id = factory.LazyFunction(uuid.uuid4)
-    expires_at = factory.LazyFunction(
-        lambda: datetime.now(UTC) + timedelta(days=7)
-    )
+    expires_at = factory.LazyFunction(lambda: datetime.now(UTC) + timedelta(days=7))
     revoked = False
     created_at = factory.LazyFunction(lambda: datetime.now(UTC))
 

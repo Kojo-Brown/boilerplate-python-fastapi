@@ -27,6 +27,11 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The importable package is literally `src` (every module imports `src.*`), which
+# does not match the distribution name, so hatchling cannot infer it.
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.4.0",
@@ -36,6 +41,9 @@ dev-dependencies = [
     "ruff>=0.11.0",
     "mypy>=1.17.0",
     "boto3-stubs[s3]>=1.35.0",
+    "types-python-jose>=3.5.0",
+    "types-authlib>=1.7.0",
+    "celery-types>=0.26.0",
     "faker>=37.0.0",
     "factory-boy>=3.3.0",
     "pytest-factoryboy>=2.7.0",

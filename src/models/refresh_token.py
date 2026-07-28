@@ -1,10 +1,14 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import UUID, Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database import Base
+
+if TYPE_CHECKING:
+    from src.models.user import User
 
 
 class RefreshToken(Base):
@@ -29,6 +33,4 @@ class RefreshToken(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    user: Mapped["User"] = relationship(  # noqa: F821
-        back_populates="refresh_tokens"
-    )
+    user: Mapped["User"] = relationship(back_populates="refresh_tokens")

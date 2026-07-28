@@ -1,4 +1,5 @@
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -53,7 +54,13 @@ async def get_current_user(
     return user
 
 
-def require_role(*roles: str) -> Callable[..., User]:
+def require_role(*roles: str) -> Callable[..., Coroutine[Any, Any, User]]:
+    """Build a dependency that admits only users holding one of ``roles``.
+
+    The returned coroutine takes the authenticated user as its single argument,
+    resolved by FastAPI via ``Depends(get_current_user)``.
+    """
+
     async def _check_role(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in roles:
             raise HTTPException(

@@ -30,6 +30,9 @@ class AuthService:
             email=data.email,
             hashed_password=hash_password(data.password),
         )
+        # get_db() never commits on exit, so an uncommitted registration is
+        # rolled back when the session closes.
+        await self.db.commit()
         return UserResponse.model_validate(user)
 
     async def login(self, email: str, password: str) -> TokenResponse:
@@ -79,9 +82,7 @@ class AuthService:
         await self.db.commit()
         return tokens
 
-    async def oauth_login(
-        self, provider: str, sub: str, email: str
-    ) -> TokenResponse:
+    async def oauth_login(self, provider: str, sub: str, email: str) -> TokenResponse:
         """Find or create a user from an OAuth provider callback."""
         user = await self.users.get_by_oauth(provider, sub)
 

@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 import structlog
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = structlog.get_logger(__name__)
 
@@ -50,16 +50,16 @@ class RequestIDMiddleware:
         status_code = 500
         start = time.perf_counter()
 
-        async def send_with_header(message: object) -> None:
+        async def send_with_header(message: Message) -> None:
             nonlocal status_code
-            if isinstance(message, dict) and message.get("type") == "http.response.start":
-                status_code = message.get("status", 500)  # type: ignore[assignment]
+            if message["type"] == "http.response.start":
+                status_code = int(message.get("status", 500))
                 headers = list(message.get("headers", []))
                 headers.append(
                     (REQUEST_ID_HEADER.lower().encode(), request_id.encode())
                 )
                 message = {**message, "headers": headers}
-            await send(message)  # type: ignore[arg-type]
+            await send(message)
 
         try:
             await self.app(scope, receive, send_with_header)
