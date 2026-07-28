@@ -14,8 +14,10 @@ Production-grade FastAPI + Python 3.14 async API boilerplate. Spec-driven and PR
    uv run mypy .
    uv run ruff check .
    uv run pytest
-   uv run python -c 'import app'
+   uv run python -c 'from src.main import app'
    ```
+   The import check needs a `.env` (`cp .env.example .env`) — settings are
+   validated at import time, so it fails without `DATABASE_URL` and `SECRET_KEY`.
 6. Commit, `git push -u origin <branch>`, then `gh pr create`.
 7. `gh pr checks --watch` → **merge only if every check is green**:
    `gh pr merge --squash --delete-branch`
