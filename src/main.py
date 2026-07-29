@@ -16,6 +16,7 @@ from src.exception_handlers import (
     validation_exception_handler,
 )
 from src.exceptions import AppException
+from src.health import router as health_router
 from src.limiter import limiter
 from src.logging_config import configure_logging
 from src.middleware.request_id import RequestIDMiddleware
@@ -43,10 +44,7 @@ app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 app.add_middleware(RequestIDMiddleware)
 
 
-@app.get("/health", tags=["health"])
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
-
+app.include_router(health_router)
 
 from src.api.v1.router import v1_router  # noqa: E402
 
