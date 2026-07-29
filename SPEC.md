@@ -6,7 +6,7 @@
 - [x] Verify every pinned version exists on PyPI, then commit a resolved `uv.lock`
 - [x] Get `uv sync`, `ruff check`, `mypy`, and `pytest` all passing locally from a clean clone
 - [x] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
-- [ ] Confirm the app imports and starts against a real Postgres in CI
+- [x] Confirm the app imports and starts against a real Postgres in CI
 
 ## Phase 1 — Foundation
 - [x] FastAPI 0.138 + Python 3.14 project with `uv` package manager
