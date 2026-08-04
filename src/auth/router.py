@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from src.auth.schemas import (
 )
 from src.auth.service import AuthService
 from src.database import get_db
+from src.exceptions import BadRequestError
 from src.limiter import limiter
 from src.tasks import send_welcome_email_task
 
@@ -32,12 +33,7 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     service = AuthService(db)
-    try:
-        user = await service.register(data)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+    user = await service.register(data)
     send_welcome_email_task.delay(user.email)
     return user
 
@@ -54,14 +50,7 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
     service = AuthService(db)
-    try:
-        return await service.login(data.email, data.password)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+    return await service.login(data.email, data.password)
 
 
 @router.post(
@@ -76,14 +65,7 @@ async def refresh(
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
     service = AuthService(db)
-    try:
-        return await service.refresh(data.refresh_token)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+    return await service.refresh(data.refresh_token)
 
 
 @router.post(
@@ -126,35 +108,27 @@ async def google_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
-    """Exchange Google authorization code for JWT access and refresh tokens."""
+    """Exchange Google authorization code for JWT access and refresh tokens.
+
+    Everything above ``AuthService`` here is transport: it turns whatever Google
+    sent back into the ``(provider, sub, email)`` triple the service works in.
+    Failures in that step genuinely are bad requests — the fault is in the
+    callback the browser arrived with, not in the domain — which is why they are
+    the only errors this module still raises for itself.
+    """
     try:
         token = await oauth.google.authorize_access_token(request)
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"OAuth error: {exc}",
-        ) from exc
+        raise BadRequestError(f"OAuth error: {exc}") from exc
 
     user_info_data = token.get("userinfo")
     if not user_info_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No user info returned from Google",
-        )
+        raise BadRequestError("No user info returned from Google")
 
     try:
         user_info = OAuthUserInfo.model_validate(user_info_data)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid user info from Google",
-        ) from exc
+    except ValueError as exc:
+        raise BadRequestError("Invalid user info from Google") from exc
 
     service = AuthService(db)
-    try:
-        return await service.oauth_login("google", user_info.sub, str(user_info.email))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
+    return await service.oauth_login("google", user_info.sub, str(user_info.email))

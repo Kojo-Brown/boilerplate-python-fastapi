@@ -9,6 +9,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/
 from src.database import get_db  # noqa: E402
 from src.limiter import limiter  # noqa: E402
 from src.main import app  # noqa: E402
+from tests.conftest import apply_column_defaults  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -22,11 +23,31 @@ def reset_limiter() -> None:
 
 @pytest.fixture
 def mock_db() -> AsyncMock:
+    """Session stub that resolves column defaults the way a real flush does.
+
+    Without this, ``refresh()`` leaves ``id``/``role``/``is_active`` at None and
+    the register handler fails to serialise its own 201 response. That used to
+    reach the client as a 400 — the router caught ``ValueError``, and
+    ``pydantic.ValidationError`` is one — so the rate-limit assertions below
+    still passed while every "successful" registration was really an error.
+    """
     session = AsyncMock()
-    session.add = MagicMock()
+    pending: list[object] = []
+
+    def _add(instance: object) -> None:
+        pending.append(instance)
+
+    async def _flush(*_args: object, **_kwargs: object) -> None:
+        for instance in pending:
+            apply_column_defaults(instance)
+
+    async def _refresh(instance: object, *_args: object, **_kwargs: object) -> None:
+        apply_column_defaults(instance)
+
+    session.add = MagicMock(side_effect=_add)
     session.commit = AsyncMock()
-    session.flush = AsyncMock()
-    session.refresh = AsyncMock()
+    session.flush = AsyncMock(side_effect=_flush)
+    session.refresh = AsyncMock(side_effect=_refresh)
     return session
 
 
@@ -71,10 +92,11 @@ async def test_login_rate_limit_returns_429_after_limit(
 
     payload = {"email": "user@example.com", "password": "wrongpassword"}
 
-    # Send 5 requests (at the limit)
+    # Send 5 requests (at the limit). Each one reaches the route and is
+    # rejected on its merits: unknown email is 401, and nothing else.
     for _ in range(5):
         response = await async_client.post("/api/v1/auth/login", json=payload)
-        assert response.status_code in {200, 401, 400}
+        assert response.status_code == 401
 
     # The 6th request should be rate-limited
     response = await async_client.post("/api/v1/auth/login", json=payload)
@@ -94,7 +116,7 @@ async def test_register_rate_limit_returns_429_after_limit(
 
     for _ in range(5):
         response = await async_client.post("/api/v1/auth/register", json=payload)
-        assert response.status_code in {200, 201, 400, 422}
+        assert response.status_code == 201
 
     response = await async_client.post("/api/v1/auth/register", json=payload)
     assert response.status_code == 429
@@ -113,7 +135,7 @@ async def test_refresh_rate_limit_allows_10_per_minute(
 
     for _ in range(10):
         response = await async_client.post("/api/v1/auth/refresh", json=payload)
-        assert response.status_code in {200, 401}
+        assert response.status_code == 401
 
     response = await async_client.post("/api/v1/auth/refresh", json=payload)
     assert response.status_code == 429

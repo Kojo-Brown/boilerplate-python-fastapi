@@ -114,7 +114,7 @@ async def test_register_response_shape(
 
 
 @pytest.mark.asyncio
-async def test_register_duplicate_email_returns_400(
+async def test_register_duplicate_email_returns_409(
     async_client: AsyncClient, mock_db: AsyncMock, mock_user: User
 ) -> None:
     mock_db.execute = AsyncMock(return_value=_result_mock(mock_user))
@@ -124,9 +124,13 @@ async def test_register_duplicate_email_returns_400(
         json={"email": mock_user.email, "password": "password123"},
     )
 
-    assert response.status_code == 400
+    # A second registration of an existing address is a conflict with the
+    # current state of the resource, not a malformed request.
+    assert response.status_code == 409
     # Errors go through the custom handler, which emits {error, message, status}
-    assert "already registered" in response.json()["message"]
+    body = response.json()
+    assert body["error"] == "CONFLICT"
+    assert "already registered" in body["message"]
 
 
 @pytest.mark.asyncio
@@ -229,7 +233,7 @@ async def test_login_unknown_email_returns_401(
 
 
 @pytest.mark.asyncio
-async def test_login_inactive_user_returns_401(
+async def test_login_inactive_user_returns_403(
     async_client: AsyncClient, mock_db: AsyncMock
 ) -> None:
     user = _make_user(email="user@example.com", password="password123", is_active=False)
@@ -240,7 +244,10 @@ async def test_login_inactive_user_returns_401(
         json={"email": "user@example.com", "password": "password123"},
     )
 
-    assert response.status_code == 401
+    # The password was right, so this is not an authentication failure — the
+    # account is switched off and re-sending credentials can never help.
+    assert response.status_code == 403
+    assert response.json()["error"] == "FORBIDDEN"
 
 
 @pytest.mark.asyncio
