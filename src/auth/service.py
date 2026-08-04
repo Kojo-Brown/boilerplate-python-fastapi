@@ -11,12 +11,25 @@ from src.auth.utils import (
     hash_password,
     verify_password,
 )
+from src.exceptions import ConflictError, ForbiddenError, UnauthorizedError
 from src.models.user import User
 from src.repositories.refresh_token import RefreshTokenRepository
 from src.repositories.user import UserRepository
 
 
 class AuthService:
+    """Authentication policy.
+
+    Every rejection is raised as an :class:`~src.exceptions.AppException`
+    subclass that already carries its own status code and error code, so no
+    caller has to re-derive one. The distinction matters: a wrong password is
+    401 — authentication failed, try again — while an account that is switched
+    off is 403 — authentication succeeded, access is refused — and retrying
+    will never help. Signalling both as one generic error made the answer to
+    "is this account inactive?" depend on which route the caller came in
+    through.
+    """
+
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.users = UserRepository(db)
@@ -24,7 +37,7 @@ class AuthService:
 
     async def register(self, data: RegisterRequest) -> UserResponse:
         if await self.users.exists_by_email(data.email):
-            raise ValueError("Email already registered")
+            raise ConflictError("Email already registered")
 
         user = await self.users.create(
             email=data.email,
@@ -43,10 +56,10 @@ class AuthService:
             or user.hashed_password is None
             or not verify_password(password, user.hashed_password)
         ):
-            raise ValueError("Invalid credentials")
+            raise UnauthorizedError("Invalid credentials")
 
         if not user.is_active:
-            raise ValueError("Account is inactive")
+            raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
         await self.db.commit()
@@ -56,27 +69,29 @@ class AuthService:
         try:
             payload = decode_token(refresh_token)
         except ValueError as exc:
-            raise ValueError("Invalid refresh token") from exc
+            raise UnauthorizedError("Invalid refresh token") from exc
 
         if payload.get("type") != "refresh":
-            raise ValueError("Invalid token type")
+            raise UnauthorizedError("Invalid token type")
 
         stored = await self.tokens.get_by_token(refresh_token)
         if stored is None or stored.revoked:
-            raise ValueError("Refresh token is invalid or revoked")
+            raise UnauthorizedError("Refresh token is invalid or revoked")
 
         expires_at = stored.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
         if expires_at < datetime.now(UTC):
-            raise ValueError("Refresh token has expired")
+            raise UnauthorizedError("Refresh token has expired")
 
         stored.revoked = True
         await self.db.flush()
 
         user = await self.users.get(stored.user_id)
-        if user is None or not user.is_active:
-            raise ValueError("User not found or inactive")
+        if user is None:
+            raise UnauthorizedError("User not found")
+        if not user.is_active:
+            raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
         await self.db.commit()
@@ -105,7 +120,7 @@ class AuthService:
                 await self.db.flush()
 
         if not user.is_active:
-            raise ValueError("Account is inactive")
+            raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
         await self.db.commit()

@@ -12,6 +12,7 @@ from src.auth.utils import (
     hash_password,
     verify_password,
 )
+from src.exceptions import ConflictError, UnauthorizedError
 from tests.conftest import apply_column_defaults
 
 # --- Utility tests (no DB needed) ---
@@ -140,8 +141,10 @@ async def test_auth_service_register_duplicate_email() -> None:
     service = AuthService(db)
     data = RegisterRequest(email="taken@example.com", password="password123")
 
-    with pytest.raises(ValueError, match="already registered"):
+    with pytest.raises(ConflictError, match="already registered") as exc_info:
         await service.register(data)
+
+    assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -154,8 +157,10 @@ async def test_auth_service_login_invalid_credentials() -> None:
     db.execute = AsyncMock(return_value=result_mock)
 
     service = AuthService(db)
-    with pytest.raises(ValueError, match="Invalid credentials"):
+    with pytest.raises(UnauthorizedError, match="Invalid credentials") as exc_info:
         await service.login("nobody@example.com", "password")
+
+    assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -182,5 +187,7 @@ async def test_auth_service_refresh_revoked_token() -> None:
     db.execute = AsyncMock(return_value=result_mock)
 
     service = AuthService(db)
-    with pytest.raises(ValueError, match="revoked"):
+    with pytest.raises(UnauthorizedError, match="revoked") as exc_info:
         await service.refresh(token_str)
+
+    assert exc_info.value.status_code == 401

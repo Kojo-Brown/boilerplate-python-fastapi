@@ -2,10 +2,17 @@ from fastapi import status
 
 
 class AppException(Exception):
-    """Base application exception. Subclass and set status_code + error_code."""
+    """Base application exception. Subclass and set status_code + error_code.
+
+    ``headers`` lets a failure mode declare the response headers its status code
+    is required to carry, so the edge never has to special-case a particular
+    exception to get them right. The class already owns ``status_code``, so
+    carrying the headers that status mandates belongs at the same level.
+    """
 
     status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
     error_code: str = "INTERNAL_SERVER_ERROR"
+    headers: dict[str, str] | None = None
 
     def __init__(self, message: str, details: object = None) -> None:
         self.message = message
@@ -34,6 +41,10 @@ class BadRequestError(AppException):
 class UnauthorizedError(AppException):
     status_code = status.HTTP_401_UNAUTHORIZED
     error_code = "UNAUTHORIZED"
+    # RFC 9110 §11.6.1 requires every 401 to name the challenge scheme, and this
+    # API only authenticates bearer tokens. Declaring it once here means no
+    # route has to remember it.
+    headers = {"WWW-Authenticate": "Bearer"}
 
     def __init__(self, message: str = "Unauthorized", details: object = None) -> None:
         super().__init__(message, details)

@@ -11,6 +11,7 @@ os.environ.setdefault("GOOGLE_CLIENT_ID", "ci-placeholder-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", secrets.token_hex(16))
 
 from src.database import get_db  # noqa: E402
+from src.exceptions import ForbiddenError  # noqa: E402
 from src.main import app  # noqa: E402
 from src.models.user import User  # noqa: E402
 
@@ -110,7 +111,7 @@ async def test_oauth_login_finds_existing_oauth_user() -> None:
 
 @pytest.mark.asyncio
 async def test_oauth_login_inactive_user_raises() -> None:
-    """oauth_login raises ValueError when the matched user account is inactive."""
+    """oauth_login raises ForbiddenError when the matched account is inactive."""
     from src.auth.service import AuthService
 
     db = AsyncMock()
@@ -132,8 +133,12 @@ async def test_oauth_login_inactive_user_raises() -> None:
     db.execute = AsyncMock(return_value=found_result)
 
     service = AuthService(db)
-    with pytest.raises(ValueError, match="inactive"):
+    with pytest.raises(ForbiddenError, match="inactive") as exc_info:
         await service.oauth_login("google", "google-sub-inactive", "inactive@gmail.com")
+
+    # Credentials were valid; the account is switched off. Retrying cannot help,
+    # so this is 403 and not 401 — on this path and on /auth/login alike.
+    assert exc_info.value.status_code == 403
 
 
 # --- Route tests ---
