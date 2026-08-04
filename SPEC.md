@@ -42,7 +42,7 @@
 - [x] Multi-stage Dockerfile + docker-compose
 
 ## Phase 6 — SOLID & Design Patterns
-- [ ] SOLID audit with before/after refactors documented in `docs/solid.md`
+- [x] SOLID audit with before/after refactors documented in `docs/solid.md` — audit in `docs/solid.md`; the LSP/ISP finding it turned up (bare `ValueError` as the universal auth failure signal) fixed by routing auth failures through domain exceptions (PR #25)
 - [ ] Factory pattern: `StorageFactory` returning S3/local/memory backends via `Protocol`
 - [ ] Strategy pattern: pluggable `NotificationStrategy` chosen per user preference
 - [ ] Decorator pattern: `@cached`, `@retry`, `@timed` decorators preserving signatures via `ParamSpec`
