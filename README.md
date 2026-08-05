@@ -69,6 +69,11 @@ a route that catches a domain error to relabel it is a route that will
 eventually disagree with another route about the same condition.
 [docs/solid.md](./docs/solid.md) records how that happened here and what it cost.
 
+## Object storage
+[docs/storage.md](./docs/storage.md) — the `StorageBackend` protocol, the S3,
+local-disk and in-memory backends behind it, how `StorageFactory` chooses one
+from `STORAGE_BACKEND`, and how to add a fourth without editing the factory.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings deferred to later spec items, and the

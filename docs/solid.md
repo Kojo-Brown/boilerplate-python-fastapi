@@ -5,9 +5,11 @@ produced. It is a record of specific defects and what was done about them, not a
 tutorial: every "before" below is code that was on `main`, and every "after" is
 code in the tree now.
 
-Two findings are reported but deliberately **not** fixed here, because a later
-`SPEC.md` item owns the fix and doing it now would smear one change across two
-items. Those are marked *Deferred* and name the item that owns them.
+Some findings were reported without being fixed in the audit itself, because a
+later `SPEC.md` item owned the fix and doing it early would have smeared one
+change across two items. Those are marked *Deferred* and name the item that
+owns them; finding 5 has since been closed by the item that owned it, and the
+section records what the fix was.
 
 ## Summary
 
@@ -17,7 +19,7 @@ items. Those are marked *Deferred* and name the item that owns them.
 | 2 | LSP | `except ValueError` caught unrelated subtypes and reported internal failures as client errors | Fixed (same refactor) |
 | 3 | SRP | `get_current_user` assembled its own `select(User)`, duplicating `UserRepository` | Fixed |
 | 4 | DIP | `AuthService` constructs its own repositories | Deferred — Phase 6, "Dependency inversion via FastAPI `Depends` + protocol-typed providers" |
-| 5 | OCP | `src/storage/s3.py` is hardwired to boto3; a second backend means editing it | Deferred — Phase 6, "Factory pattern: `StorageFactory`" |
+| 5 | OCP | `src/storage/s3.py` is hardwired to boto3; a second backend means editing it | Fixed — `StorageBackend` protocol + `StorageFactory` |
 | 6 | ISP | `AuthService` takes a whole `AsyncSession` to call `commit()` and `flush()` | Deferred — follows finding 4 |
 
 Findings 1–3 changed the HTTP contract. The changes are listed in
@@ -233,12 +235,22 @@ providers, overridable in tests"*.
 
 ### 5. OCP — storage is boto3, structurally
 
-`src/storage/s3.py` exposes module-level functions over an `lru_cache`d boto3
-client. Adding a local-disk or in-memory backend means editing this module and
+`src/storage/s3.py` exposed module-level functions over an `lru_cache`d boto3
+client. Adding a local-disk or in-memory backend meant editing this module and
 every caller: closed to extension in the specific way OCP names.
 
-Owned by Phase 6, *"Factory pattern: `StorageFactory` returning S3/local/memory
-backends via `Protocol`"*.
+**Fixed.** `src/storage/base.py` now declares a `StorageBackend` `Protocol` —
+`put`, `get`, `delete`, `exists`, `list_keys`, `name` — with no import of
+boto3, the filesystem or the settings object. `S3Storage`, `LocalStorage` and
+`MemoryStorage` implement it structurally, inheriting from nothing, and
+`StorageFactory` builds whichever `STORAGE_BACKEND` names. A fourth backend is
+a new module plus one `StorageFactory.register(...)` call; no existing caller
+or branch in the factory changes. See [storage.md](./storage.md).
+
+The protocol stops short of presigned URLs on purpose. Only S3 can mint a
+credential a browser POSTs to directly, and a protocol method that two of three
+implementations could only answer with `NotImplementedError` would be an LSP
+violation introduced to fix an OCP one. That capability stays on `S3Storage`.
 
 ### 6. ISP — a whole session for two methods
 
@@ -255,7 +267,7 @@ Follows finding 4; it is the same seam and should be cut once, not twice.
 
 - **LSP across the exception hierarchy.** Every `AppException` subclass widens
   `__init__` by adding a default and narrows nothing. `StorageError` (in
-  `src/storage/s3.py`) is substitutable for `AppException` everywhere the
+  `src/storage/base.py`) is substitutable for `AppException` everywhere the
   handler expects one.
 - **SRP in `src/health.py`.** Liveness and readiness are separate endpoints for a
   documented reason, and the split is right.
