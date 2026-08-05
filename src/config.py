@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +39,12 @@ class Settings(BaseSettings):
     AWS_REGION: str = "us-east-1"
     AWS_S3_BUCKET: str = ""
     AWS_S3_PRESIGNED_URL_EXPIRY: int = 3600
+
+    # Object storage backend (see src/storage/factory.py). "local" and "memory"
+    # exist for development and tests; "memory" holds objects in the worker
+    # process, so it is never correct for a multi-worker deployment.
+    STORAGE_BACKEND: Literal["s3", "local", "memory"] = "s3"
+    STORAGE_LOCAL_ROOT: str = "./var/storage"
 
 
 settings = Settings()

@@ -5,11 +5,13 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from src.exceptions import BadRequestError
-from src.storage.s3 import (
+from src.storage.base import (
     ALLOWED_CONTENT_TYPES,
     MAX_FILE_SIZE_BYTES,
     StorageError,
-    _build_object_key,
+    build_object_key,
+)
+from src.storage.s3 import (
     delete_s3_object,
     generate_presigned_download,
     generate_presigned_upload,
@@ -20,11 +22,11 @@ from src.storage.schemas import (
     PresignedUploadResponse,
 )
 
-# --- _build_object_key ---
+# --- build_object_key ---
 
 
 def test_build_object_key_includes_extension() -> None:
-    key = _build_object_key("uploads", "photo.jpg")
+    key = build_object_key("uploads", "photo.jpg")
     assert key.startswith("uploads/")
     assert key.endswith(".jpg")
     uuid_part = key[len("uploads/") :].rsplit(".", 1)[0]
@@ -32,14 +34,14 @@ def test_build_object_key_includes_extension() -> None:
 
 
 def test_build_object_key_without_extension() -> None:
-    key = _build_object_key("docs", "myfile")
+    key = build_object_key("docs", "myfile")
     assert key.startswith("docs/")
     assert "." not in key.split("/")[1]
 
 
 def test_build_object_key_is_unique() -> None:
-    first = _build_object_key("uploads", "same.jpg")
-    second = _build_object_key("uploads", "same.jpg")
+    first = build_object_key("uploads", "same.jpg")
+    second = build_object_key("uploads", "same.jpg")
     assert first != second
 
 
