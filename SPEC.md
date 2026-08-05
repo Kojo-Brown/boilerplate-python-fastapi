@@ -43,7 +43,7 @@
 
 ## Phase 6 — SOLID & Design Patterns
 - [x] SOLID audit with before/after refactors documented in `docs/solid.md` — audit in `docs/solid.md`; the LSP/ISP finding it turned up (bare `ValueError` as the universal auth failure signal) fixed by routing auth failures through domain exceptions (PR #25)
-- [ ] Factory pattern: `StorageFactory` returning S3/local/memory backends via `Protocol`
+- [x] Factory pattern: `StorageFactory` returning S3/local/memory backends via `Protocol` — `StorageBackend` protocol in `src/storage/base.py` with no boto3, filesystem or settings import; `S3Storage`/`LocalStorage`/`MemoryStorage` implement it structurally and one parametrised contract suite runs against all three. Presigned URLs are deliberately left off the protocol — only S3 can mint them, so putting them there would trade an OCP violation for an LSP one — and stay on `S3Storage`, which is why `/api/v1/uploads` is unchanged. Closes finding 5 of `docs/solid.md` (PR #26)
 - [ ] Strategy pattern: pluggable `NotificationStrategy` chosen per user preference
 - [ ] Decorator pattern: `@cached`, `@retry`, `@timed` decorators preserving signatures via `ParamSpec`
 - [ ] Observer pattern: async domain event bus with typed subscribers
