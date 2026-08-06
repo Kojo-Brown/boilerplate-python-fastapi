@@ -32,6 +32,8 @@ class UserFactory(factory.Factory):
     updated_at = factory.LazyFunction(lambda: datetime.now(UTC))
     oauth_provider = None
     oauth_sub = None
+    notification_channel = "email"
+    notification_webhook_url = None
 
     class Params:
         inactive = factory.Trait(is_active=False)
@@ -41,6 +43,13 @@ class UserFactory(factory.Factory):
             oauth_provider="google",
             oauth_sub=factory.LazyFunction(lambda: _fake.uuid4()),
         )
+        webhook_notifications = factory.Trait(
+            notification_channel="webhook",
+            notification_webhook_url=factory.Sequence(
+                lambda n: f"https://hooks.example.com/u/{n}"
+            ),
+        )
+        opted_out = factory.Trait(notification_channel="none")
 
 
 class AdminUserFactory(UserFactory):

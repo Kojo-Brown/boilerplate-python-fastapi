@@ -46,5 +46,19 @@ class Settings(BaseSettings):
     STORAGE_BACKEND: Literal["s3", "local", "memory"] = "s3"
     STORAGE_LOCAL_ROOT: str = "./var/storage"
 
+    # Notifications (see src/notifications/registry.py). The default is only a
+    # fallback for users whose preference is unset — a user who has chosen a
+    # channel is routed there regardless of this value.
+    NOTIFICATION_DEFAULT_CHANNEL: Literal["email", "webhook", "none"] = "email"
+    # Shared with webhook receivers so they can authenticate deliveries. Empty
+    # means unsigned: fine for a local receiver, never for a third party.
+    NOTIFICATION_WEBHOOK_SECRET: str = ""
+    NOTIFICATION_WEBHOOK_TIMEOUT_SECONDS: float = 10.0
+    NOTIFICATION_WEBHOOK_MAX_ATTEMPTS: int = 3
+    NOTIFICATION_WEBHOOK_BACKOFF_SECONDS: float = 0.5
+    # Lets webhooks target loopback and RFC 1918 addresses. Development only —
+    # switching it on in production turns a user-supplied URL into SSRF.
+    NOTIFICATION_WEBHOOK_ALLOW_PRIVATE_HOSTS: bool = False
+
 
 settings = Settings()

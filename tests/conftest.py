@@ -124,6 +124,7 @@ def mock_user() -> User:
         role="user",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
+        notification_channel="email",
     )
 
 
@@ -139,6 +140,7 @@ def mock_admin() -> User:
         role="admin",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
+        notification_channel="email",
     )
 
 

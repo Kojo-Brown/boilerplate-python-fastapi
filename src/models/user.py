@@ -38,6 +38,18 @@ class User(Base):
         String(255), nullable=True, index=True
     )
 
+    # Which notification strategy reaches this user. Deliberately a plain string
+    # rather than a native enum: adding a channel is a registration call in
+    # src/notifications/registry.py, and an enum type would turn that into a
+    # migration and a deploy-order problem. src.notifications resolves an
+    # unknown value to UnknownNotificationChannelError rather than guessing.
+    notification_channel: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="email", server_default="email"
+    )
+    notification_webhook_url: Mapped[str | None] = mapped_column(
+        String(2048), nullable=True
+    )
+
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
