@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # A run that is queued but never picked up gets cancelled by GitHub, which
+  # leaves the PR red with nothing to fix — no job produced output, so there is
+  # no failure to diagnose. The rerun API answers 403 to the automation token,
+  # so without this the only way to ask for another run is to push a commit,
+  # and an empty commit is a poor thing to put in a feature branch's history.
+  workflow_dispatch:
 
 env:
   # Matches .python-version, the Dockerfile base image, ruff target-version and
