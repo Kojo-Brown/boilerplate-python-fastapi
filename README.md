@@ -74,6 +74,11 @@ eventually disagree with another route about the same condition.
 local-disk and in-memory backends behind it, how `StorageFactory` chooses one
 from `STORAGE_BACKEND`, and how to add a fourth without editing the factory.
 
+## Decorators
+[docs/decorators.md](./docs/decorators.md) — `@cached`, `@retry` and `@timed`
+from `src/decorators`, what each is and is not for, how they keep the signature
+of what they wrap, and the order to stack them in.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings deferred to later spec items, and the
