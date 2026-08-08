@@ -79,6 +79,12 @@ from `STORAGE_BACKEND`, and how to add a fourth without editing the factory.
 from `src/decorators`, what each is and is not for, how they keep the signature
 of what they wrap, and the order to stack them in.
 
+## Domain events
+[docs/events.md](./docs/events.md) — the async event bus in `src/events`, how a
+subscriber is type-checked against the event it observes, why publishing waits
+for its subscribers and happens after the commit, and what happens when one of
+them fails.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings deferred to later spec items, and the
