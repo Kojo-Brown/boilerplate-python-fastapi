@@ -11,6 +11,8 @@ from src.auth.utils import (
     hash_password,
     verify_password,
 )
+from src.events.bus import EventBus, event_bus
+from src.events.catalog import UserLoggedIn, UserRegistered
 from src.exceptions import ConflictError, ForbiddenError, UnauthorizedError
 from src.models.user import User
 from src.repositories.refresh_token import RefreshTokenRepository
@@ -28,12 +30,23 @@ class AuthService:
     will never help. Signalling both as one generic error made the answer to
     "is this account inactive?" depend on which route the caller came in
     through.
+
+    What happens *because* an account was created or entered is not decided
+    here. This class publishes domain events and returns; `src/events` routes
+    them to whatever is subscribed. Every publish is deliberately placed after
+    the commit — a subscriber that reacted to a registration the database then
+    rolled back would be reacting to a user who does not exist, and a
+    subscriber's own failure never travels back to the caller, so a broken
+    mail queue cannot fail a registration that already succeeded.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, events: EventBus | None = None) -> None:
         self.db = db
         self.users = UserRepository(db)
         self.tokens = RefreshTokenRepository(db)
+        # Injectable so a test can hand over a bus of its own instead of
+        # registering against the process-wide one and racing every other test.
+        self.events = events if events is not None else event_bus
 
     async def register(self, data: RegisterRequest) -> UserResponse:
         if await self.users.exists_by_email(data.email):
@@ -46,7 +59,12 @@ class AuthService:
         # get_db() never commits on exit, so an uncommitted registration is
         # rolled back when the session closes.
         await self.db.commit()
-        return UserResponse.model_validate(user)
+
+        response = UserResponse.model_validate(user)
+        await self.events.publish(
+            UserRegistered(user_id=str(user.id), email=user.email, via="password")
+        )
+        return response
 
     async def login(self, email: str, password: str) -> TokenResponse:
         user = await self.users.get_by_email(email)
@@ -63,6 +81,9 @@ class AuthService:
 
         tokens = await self._issue_tokens(user)
         await self.db.commit()
+        await self.events.publish(
+            UserLoggedIn(user_id=str(user.id), email=user.email, method="password")
+        )
         return tokens
 
     async def refresh(self, refresh_token: str) -> TokenResponse:
@@ -100,11 +121,13 @@ class AuthService:
     async def oauth_login(self, provider: str, sub: str, email: str) -> TokenResponse:
         """Find or create a user from an OAuth provider callback."""
         user = await self.users.get_by_oauth(provider, sub)
+        created = False
 
         if user is None:
             user = await self.users.get_by_email(email)
 
             if user is None:
+                created = True
                 user = await self.users.create(
                     email=email,
                     hashed_password=None,
@@ -124,6 +147,20 @@ class AuthService:
 
         tokens = await self._issue_tokens(user)
         await self.db.commit()
+
+        user_id, user_email = str(user.id), user.email
+        # A first OAuth sign-in is a registration as well as a login, and
+        # subscribers care about the difference: the welcome email is owed to
+        # both, an address-confirmation mail to neither, since the provider
+        # already verified it. Linking a provider to an existing account is
+        # neither — that account was registered long ago.
+        if created:
+            await self.events.publish(
+                UserRegistered(user_id=user_id, email=user_email, via="oauth")
+            )
+        await self.events.publish(
+            UserLoggedIn(user_id=user_id, email=user_email, method="oauth")
+        )
         return tokens
 
     async def logout(self, refresh_token: str) -> None:

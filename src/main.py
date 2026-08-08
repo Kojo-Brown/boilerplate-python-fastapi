@@ -8,6 +8,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from src.config import settings
+from src.events.bus import event_bus
+from src.events.subscribers import register_default_subscribers
 from src.exception_handlers import (
     app_exception_handler,
     http_exception_handler,
@@ -25,7 +27,13 @@ from src.middleware.request_id import RequestIDMiddleware
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_logging(settings.LOG_LEVEL)
+    # At start-up rather than at import, so that importing a module never
+    # turns on a side effect and a unit test gets an empty bus by default.
+    register_default_subscribers()
     yield
+    # Nothing is in flight by the time this runs — publish awaits its
+    # subscribers — so dropping the registrations is all shutdown needs.
+    event_bus.clear()
 
 
 app = FastAPI(
