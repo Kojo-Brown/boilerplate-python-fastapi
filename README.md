@@ -85,6 +85,12 @@ subscriber is type-checked against the event it observes, why publishing waits
 for its subscribers and happens after the commit, and what happens when one of
 them fails.
 
+## Payments
+[docs/payments.md](./docs/payments.md) — the `PaymentGateway` protocol, the
+Stripe and PayPal adapters behind it, the table of provider differences each
+one absorbs, why amounts are integer minor units with a currency exponent
+table, and how `pending` differs from both success and failure.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings deferred to later spec items, and the

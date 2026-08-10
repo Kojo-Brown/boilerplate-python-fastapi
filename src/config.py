@@ -60,5 +60,20 @@ class Settings(BaseSettings):
     # switching it on in production turns a user-supplied URL into SSRF.
     NOTIFICATION_WEBHOOK_ALLOW_PRIVATE_HOSTS: bool = False
 
+    # Payments (see src/payments/registry.py). Only the selected provider's
+    # credentials need to be present; the registry raises
+    # PaymentConfigurationError when they are missing, rather than failing at a
+    # customer's checkout. The base URLs are overridable so tests and staging
+    # can point at a sandbox or a local stub.
+    PAYMENT_GATEWAY: Literal["stripe", "paypal"] = "stripe"
+    PAYMENT_TIMEOUT_SECONDS: float = 15.0
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_API_BASE_URL: str = "https://api.stripe.com"
+    PAYPAL_CLIENT_ID: str = ""
+    PAYPAL_CLIENT_SECRET: str = ""
+    # Sandbox by default: a wrong value here charges real cards, so production
+    # has to say so explicitly (https://api-m.paypal.com).
+    PAYPAL_API_BASE_URL: str = "https://api-m.sandbox.paypal.com"
+
 
 settings = Settings()
