@@ -1,15 +1,15 @@
 """What `AuthService` publishes, and what it deliberately does not.
 
-The service is exercised against a stub session, the same way `test_auth.py`
-does it: what is under test here is which events come out and when, not
-SQLAlchemy.
+The service runs over the in-memory stores from `tests/fakes.py`, the same way
+`test_auth.py` does it: what is under test here is which events come out and
+when, not SQLAlchemy. The *bus* is real, because subscriber isolation and
+ordering are the bus's behaviour and a collecting fake would not have them.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -21,7 +21,12 @@ from src.events.bus import EventBus
 from src.events.catalog import UserLoggedIn, UserRegistered
 from src.exceptions import ConflictError
 from src.models.user import User
-from tests.conftest import apply_column_defaults
+from tests.fakes import (
+    InMemoryRefreshTokenStore,
+    InMemoryUserStore,
+    RecordingUnitOfWork,
+    apply_column_defaults,
+)
 
 PASSWORD = "not-a-real-password"
 
@@ -59,25 +64,26 @@ def make_user(email: str = "alice@example.com", **overrides: object) -> User:
     return user
 
 
-def session_returning(*rows: object) -> AsyncMock:
-    """A stub session whose successive `execute` calls yield `rows`."""
-    db = AsyncMock()
-    results = []
-    for row in rows:
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = row
-        results.append(result)
-    db.execute = AsyncMock(side_effect=results)
-    db.add = MagicMock()
-    db.commit = AsyncMock()
-    db.flush = AsyncMock()
+def service_over(
+    bus: EventBus,
+    *,
+    users: list[User] | None = None,
+    tokens: InMemoryRefreshTokenStore | None = None,
+    uow: RecordingUnitOfWork | None = None,
+) -> AuthService:
+    """The real service over in-memory stores, publishing to `bus`.
 
-    async def fake_refresh(obj: object, *_a: object, **_kw: object) -> None:
-        if isinstance(obj, User):
-            apply_column_defaults(obj)
-
-    db.refresh = AsyncMock(side_effect=fake_refresh)
-    return db
+    Seeding is by *content* — the users that exist — rather than by the order
+    the service happens to query in. The stub session this replaced took a list
+    of rows to return from successive `execute` calls, so adding a lookup to
+    the service silently shifted every later answer onto the wrong question.
+    """
+    return AuthService(
+        users=InMemoryUserStore(users),
+        tokens=tokens if tokens is not None else InMemoryRefreshTokenStore(),
+        uow=uow if uow is not None else RecordingUnitOfWork(),
+        events=bus,
+    )
 
 
 # --- registration ---
@@ -86,8 +92,7 @@ def session_returning(*rows: object) -> AsyncMock:
 async def test_register_publishes_user_registered(
     bus: EventBus, published: list[DomainEvent]
 ) -> None:
-    db = session_returning(None)
-    service = AuthService(db, events=bus)
+    service = service_over(bus)
 
     response = await service.register(
         RegisterRequest(email="new@example.com", password=PASSWORD)
@@ -105,18 +110,17 @@ async def test_register_publishes_after_the_commit(bus: EventBus) -> None:
     """A subscriber that fired before the commit could react to a
     registration the database then rolled back."""
     order: list[str] = []
-    db = session_returning(None)
 
-    async def original_commit() -> None:
-        order.append("commit")
-
-    db.commit = AsyncMock(side_effect=original_commit)
+    class OrderingUnitOfWork(RecordingUnitOfWork):
+        async def commit(self) -> None:
+            await super().commit()
+            order.append("commit")
 
     async def record(event: DomainEvent) -> None:
         order.append("publish")
 
     bus.subscribe(DomainEvent, record)
-    await AuthService(db, events=bus).register(
+    await service_over(bus, uow=OrderingUnitOfWork()).register(
         RegisterRequest(email="new@example.com", password=PASSWORD)
     )
 
@@ -126,8 +130,7 @@ async def test_register_publishes_after_the_commit(bus: EventBus) -> None:
 async def test_a_rejected_registration_publishes_nothing(
     bus: EventBus, published: list[DomainEvent]
 ) -> None:
-    db = session_returning(make_user("taken@example.com"))
-    service = AuthService(db, events=bus)
+    service = service_over(bus, users=[make_user("taken@example.com")])
 
     with pytest.raises(ConflictError):
         await service.register(
@@ -144,9 +147,8 @@ async def test_a_failing_subscriber_does_not_fail_the_registration(
         raise RuntimeError("the mail queue is down")
 
     bus.subscribe(DomainEvent, explodes)
-    db = session_returning(None)
 
-    response = await AuthService(db, events=bus).register(
+    response = await service_over(bus).register(
         RegisterRequest(email="new@example.com", password=PASSWORD)
     )
 
@@ -160,8 +162,7 @@ async def test_login_publishes_user_logged_in(
     bus: EventBus, published: list[DomainEvent]
 ) -> None:
     user = make_user()
-    db = session_returning(user)
-    service = AuthService(db, events=bus)
+    service = service_over(bus, users=[user])
 
     await service.login(user.email, PASSWORD)
 
@@ -177,8 +178,7 @@ async def test_a_rejected_login_publishes_nothing(
 ) -> None:
     from src.exceptions import UnauthorizedError
 
-    db = session_returning(None)
-    service = AuthService(db, events=bus)
+    service = service_over(bus)
 
     with pytest.raises(UnauthorizedError):
         await service.login("nobody@example.com", PASSWORD)
@@ -192,24 +192,13 @@ async def test_a_refresh_is_not_a_login(
     """Rotating a token is the same session continuing. Publishing a login for
     it would make "last seen" mean "last polled"."""
     from src.auth.utils import create_refresh_token
-    from src.models.refresh_token import RefreshToken
 
     user = make_user()
     token_str, expires_at = create_refresh_token(str(user.id), str(uuid.uuid4()))
-    stored = RefreshToken(
-        id=uuid.uuid4(),
-        token=token_str,
-        user_id=user.id,
-        expires_at=expires_at,
-        revoked=False,
-        created_at=datetime.now(UTC),
-    )
-    db = session_returning(stored)
-    # `refresh` looks the user up by primary key, which is `session.get`
-    # rather than a `select`.
-    db.get = AsyncMock(return_value=user)
+    tokens = InMemoryRefreshTokenStore()
+    await tokens.create(token=token_str, user_id=user.id, expires_at=expires_at)
 
-    await AuthService(db, events=bus).refresh(token_str)
+    await service_over(bus, users=[user], tokens=tokens).refresh(token_str)
 
     assert published == []
 
@@ -220,8 +209,7 @@ async def test_a_refresh_is_not_a_login(
 async def test_first_oauth_sign_in_is_both_a_registration_and_a_login(
     bus: EventBus, published: list[DomainEvent]
 ) -> None:
-    db = session_returning(None, None)
-    service = AuthService(db, events=bus)
+    service = service_over(bus)
 
     await service.oauth_login("google", "sub-123", "new@example.com")
 
@@ -238,9 +226,8 @@ async def test_a_returning_oauth_user_only_logs_in(
     bus: EventBus, published: list[DomainEvent]
 ) -> None:
     user = make_user(oauth_provider="google", oauth_sub="sub-123")
-    db = session_returning(user)
 
-    await AuthService(db, events=bus).oauth_login("google", "sub-123", user.email)
+    await service_over(bus, users=[user]).oauth_login("google", "sub-123", user.email)
 
     assert [type(e).event_name for e in published] == ["user.logged_in"]
 
@@ -250,17 +237,7 @@ async def test_linking_a_provider_to_an_existing_account_is_not_a_registration(
 ) -> None:
     """That account was registered long ago; only the provider is new."""
     user = make_user()
-    db = session_returning(None, user)
 
-    await AuthService(db, events=bus).oauth_login("google", "sub-123", user.email)
+    await service_over(bus, users=[user]).oauth_login("google", "sub-123", user.email)
 
     assert [type(e).event_name for e in published] == ["user.logged_in"]
-
-
-# --- wiring ---
-
-
-def test_the_service_defaults_to_the_process_wide_bus() -> None:
-    from src.events.bus import event_bus
-
-    assert AuthService(AsyncMock()).events is event_bus

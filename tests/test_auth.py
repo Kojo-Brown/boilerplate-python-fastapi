@@ -1,10 +1,10 @@
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.auth.schemas import RegisterRequest
+from src.auth.service import AuthService
 from src.auth.utils import (
     create_access_token,
     create_refresh_token,
@@ -13,7 +13,12 @@ from src.auth.utils import (
     verify_password,
 )
 from src.exceptions import ConflictError, UnauthorizedError
-from tests.conftest import apply_column_defaults
+from src.models.user import User
+from tests.fakes import (
+    InMemoryRefreshTokenStore,
+    InMemoryUserStore,
+    RecordingUnitOfWork,
+)
 
 # --- Utility tests (no DB needed) ---
 
@@ -81,113 +86,90 @@ def test_decode_tampered_token_raises() -> None:
         decode_token(tampered)
 
 
-# --- Service tests (mocked DB) ---
+# --- Service tests (in-memory stores, no session) ---
+#
+# `AuthService` takes protocols, so these hand it the fakes from `tests/fakes.py`
+# and assert on policy. Nothing here teaches a mock how SQLAlchemy behaves; the
+# repositories' own behaviour is covered in `test_repository.py`.
 
 
-@pytest.mark.asyncio
-async def test_auth_service_register_success() -> None:
-    from src.auth.service import AuthService
-    from src.models.user import User
-
-    db = AsyncMock()
-
-    # First execute: check existing user → None
-    result_mock = MagicMock()
-    result_mock.scalar_one_or_none.return_value = None
-    db.execute = AsyncMock(return_value=result_mock)
-
-    db.add = MagicMock()
-    db.commit = AsyncMock()
-
-    # A real flush/refresh resolves the model's column defaults; the stub session
-    # has to do the same or the response model sees None for id/role/is_active.
-    async def fake_refresh(obj: object, *_a: object, **_kw: object) -> None:
-        if isinstance(obj, User):
-            apply_column_defaults(obj)
-
-    db.flush = AsyncMock()
-    db.refresh = AsyncMock(side_effect=fake_refresh)
-
-    service = AuthService(db)
+async def test_auth_service_register_success(
+    auth_service: AuthService,
+    user_store: InMemoryUserStore,
+    uow: RecordingUnitOfWork,
+) -> None:
     data = RegisterRequest(email="new@example.com", password="password123")
 
-    response = await service.register(data)
+    response = await auth_service.register(data)
+
     assert response.email == "new@example.com"
     assert response.role == "user"
     assert response.is_active is True
-    db.commit.assert_called_once()
+    assert uow.commits == 1
+    assert [u.email for u in user_store.users] == ["new@example.com"]
 
 
-@pytest.mark.asyncio
-async def test_auth_service_register_duplicate_email() -> None:
-    from src.auth.service import AuthService
-    from src.models.user import User
-
-    db = AsyncMock()
-    existing = User(
-        id=uuid.uuid4(),
-        email="taken@example.com",
-        hashed_password="hashed",
-        is_active=True,
-        is_verified=False,
-        role="user",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+async def test_auth_service_register_stores_a_hash_not_the_password(
+    auth_service: AuthService, user_store: InMemoryUserStore
+) -> None:
+    await auth_service.register(
+        RegisterRequest(email="new@example.com", password="password123")
     )
-    result_mock = MagicMock()
-    result_mock.scalar_one_or_none.return_value = existing
-    db.execute = AsyncMock(return_value=result_mock)
 
-    service = AuthService(db)
-    data = RegisterRequest(email="taken@example.com", password="password123")
+    stored = user_store.users[0].hashed_password
+    assert stored is not None
+    assert stored != "password123"
+    assert verify_password("password123", stored)
+
+
+async def test_auth_service_register_duplicate_email(
+    auth_service: AuthService, user_store: InMemoryUserStore, uow: RecordingUnitOfWork
+) -> None:
+    user_store.users.append(
+        User(
+            id=uuid.uuid4(),
+            email="taken@example.com",
+            hashed_password="hashed",
+            is_active=True,
+            is_verified=False,
+            role="user",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+    )
 
     with pytest.raises(ConflictError, match="already registered") as exc_info:
-        await service.register(data)
+        await auth_service.register(
+            RegisterRequest(email="taken@example.com", password="password123")
+        )
 
     assert exc_info.value.status_code == 409
+    # A rejected registration must not commit a transaction it never opened.
+    assert uow.commits == 0
 
 
-@pytest.mark.asyncio
-async def test_auth_service_login_invalid_credentials() -> None:
-    from src.auth.service import AuthService
-
-    db = AsyncMock()
-    result_mock = MagicMock()
-    result_mock.scalar_one_or_none.return_value = None
-    db.execute = AsyncMock(return_value=result_mock)
-
-    service = AuthService(db)
+async def test_auth_service_login_invalid_credentials(
+    auth_service: AuthService,
+) -> None:
     with pytest.raises(UnauthorizedError, match="Invalid credentials") as exc_info:
-        await service.login("nobody@example.com", "password")
+        await auth_service.login("nobody@example.com", "password")
 
     assert exc_info.value.status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_auth_service_refresh_revoked_token() -> None:
-    from src.auth.service import AuthService
-    from src.models.refresh_token import RefreshToken
-
+async def test_auth_service_refresh_revoked_token(
+    auth_service: AuthService, token_store: InMemoryRefreshTokenStore
+) -> None:
     user_id = uuid.uuid4()
     jti = str(uuid.uuid4())
     token_str, expires_at = create_refresh_token(str(user_id), jti)
 
-    revoked = RefreshToken(
-        id=uuid.uuid4(),
-        token=token_str,
-        user_id=user_id,
-        expires_at=expires_at,
-        revoked=True,
-        created_at=datetime.now(UTC),
+    stored = await token_store.create(
+        token=token_str, user_id=user_id, expires_at=expires_at
     )
+    stored.revoked = True
 
-    db = AsyncMock()
-    result_mock = MagicMock()
-    result_mock.scalar_one_or_none.return_value = revoked
-    db.execute = AsyncMock(return_value=result_mock)
-
-    service = AuthService(db)
     with pytest.raises(UnauthorizedError, match="revoked") as exc_info:
-        await service.refresh(token_str)
+        await auth_service.refresh(token_str)
 
     assert exc_info.value.status_code == 401

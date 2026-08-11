@@ -7,9 +7,9 @@ code in the tree now.
 
 Some findings were reported without being fixed in the audit itself, because a
 later `SPEC.md` item owned the fix and doing it early would have smeared one
-change across two items. Those are marked *Deferred* and name the item that
-owns them; finding 5 has since been closed by the item that owned it, and the
-section records what the fix was.
+change across two items. Those were marked *Deferred* and named the item that
+owned them. All three have since been closed by the items that owned them, and
+each section records what the fix was.
 
 ## Summary
 
@@ -18,9 +18,9 @@ section records what the fix was.
 | 1 | SRP, OCP | `AuthService` signalled every rejection as `ValueError`; each router re-derived a status code | Fixed |
 | 2 | LSP | `except ValueError` caught unrelated subtypes and reported internal failures as client errors | Fixed (same refactor) |
 | 3 | SRP | `get_current_user` assembled its own `select(User)`, duplicating `UserRepository` | Fixed |
-| 4 | DIP | `AuthService` constructs its own repositories | Deferred — Phase 6, "Dependency inversion via FastAPI `Depends` + protocol-typed providers" |
+| 4 | DIP | `AuthService` constructs its own repositories | Fixed — `UserStore`/`RefreshTokenStore` protocols + `src/dependencies.py` |
 | 5 | OCP | `src/storage/s3.py` is hardwired to boto3; a second backend means editing it | Fixed — `StorageBackend` protocol + `StorageFactory` |
-| 6 | ISP | `AuthService` takes a whole `AsyncSession` to call `commit()` and `flush()` | Deferred — follows finding 4 |
+| 6 | ISP | `AuthService` takes a whole `AsyncSession` to call `commit()` and `flush()` | Fixed — `UnitOfWork` protocol (same refactor as 4) |
 
 Findings 1–3 changed the HTTP contract. The changes are listed in
 [API changes](#api-changes) at the end.
@@ -210,13 +210,16 @@ which asserts the load is a primary-key `get` with a real `UUID`.
 
 ---
 
-## Deferred findings
+## Findings deferred to a later item
 
-Real, and left alone on purpose. Each has a `SPEC.md` item whose whole subject it
-is; fixing it here would leave that item with nothing to do and this change with
-a diff nobody can review as one idea.
+Real, and left alone at audit time on purpose. Each had a `SPEC.md` item whose
+whole subject it was; fixing it early would have left that item with nothing to
+do and this change with a diff nobody can review as one idea. All three are now
+closed.
 
 ### 4. DIP — `AuthService` constructs what it depends on
+
+**Before.**
 
 ```python
 def __init__(self, db: AsyncSession) -> None:
@@ -230,8 +233,28 @@ to survive SQLAlchemy — which is exactly the stub that was silently wrong in
 finding 2. `CLAUDE.md` already asks for the opposite ("typed against Protocols so
 tests can override").
 
-Owned by Phase 6, *"Dependency inversion via FastAPI `Depends` + protocol-typed
-providers, overridable in tests"*.
+**Fixed.** `src/repositories/protocols.py` declares `UserStore` and
+`RefreshTokenStore`, listing the methods authentication actually calls and no
+others. `AuthService.__init__` now takes them, plus a `UnitOfWork` (finding 6)
+and an `EventPublisher`, all keyword-only:
+
+```python
+def __init__(
+    self,
+    *,
+    users: UserStore,
+    tokens: RefreshTokenStore,
+    uow: UnitOfWork,
+    events: EventPublisher,
+) -> None:
+```
+
+`UserRepository` and `RefreshTokenRepository` implement the protocols
+structurally, inheriting from nothing. The concrete names now appear only in
+`src/dependencies.py`, the composition root, which `test_dependency_inversion.py`
+enforces by parsing the imports of `src/auth/service.py` and `src/auth/router.py`
+— the one-line regression that reintroduces this finding fails a test rather
+than passing review. See [dependency-injection.md](./dependency-injection.md).
 
 ### 5. OCP — storage is boto3, structurally
 
@@ -260,6 +283,14 @@ connection — to reach two of them, which is what forces every test to construc
 one. The narrow interface is a unit-of-work protocol.
 
 Follows finding 4; it is the same seam and should be cut once, not twice.
+
+**Fixed**, in that same refactor. `src/unit_of_work.py` declares `UnitOfWork`
+with exactly `flush()` and `commit()` — not `rollback()`, which nothing calls,
+because `get_db` closes without committing and an unfinished transaction is
+already discarded. `AsyncSession` satisfies it structurally, so
+`get_unit_of_work` hands one over unwrapped and there is no adapter class
+forwarding two methods. The payoff is visible in the tests: `tests/fakes.py`
+answers the whole protocol in three lines that count calls.
 
 ---
 

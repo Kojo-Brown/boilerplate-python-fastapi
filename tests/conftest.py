@@ -16,15 +16,27 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pytest_factoryboy import register
-from sqlalchemy import DateTime, inspect
 
 from src.auth.dependencies import get_current_user
+from src.auth.service import AuthService
 from src.auth.utils import create_access_token
 from src.database import get_db
+from src.dependencies import get_auth_service
 from src.main import app
 from src.models.user import User
 from src.worker import celery_app as _celery_app
 from tests.factories import AdminUserFactory, RefreshTokenFactory, UserFactory
+from tests.fakes import (
+    CollectingPublisher,
+    InMemoryRefreshTokenStore,
+    InMemoryUserStore,
+    RecordingUnitOfWork,
+    apply_column_defaults,
+)
+
+# Re-exported: it lived here before `tests/fakes.py` existed, and the fakes now
+# need it too. Kept importable from both so no test had to move for it.
+__all__ = ["apply_column_defaults"]
 
 # Register factories as pytest fixtures.
 # UserFactory      → fixtures: user_factory, user
@@ -39,33 +51,6 @@ register(RefreshTokenFactory)
 def celery_eager() -> None:
     """Run all Celery tasks synchronously and propagate exceptions in tests."""
     _celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
-
-
-def apply_column_defaults(instance: object) -> None:
-    """Populate unset columns the way a real INSERT flush would.
-
-    SQLAlchemy resolves ``default=`` and ``server_default=`` at flush time, not at
-    construction time. A bare ``AsyncMock`` session never flushes, so freshly
-    constructed models keep ``None`` for ``id``, ``role``, ``is_active`` and the
-    timestamps — which then fails response-model validation for reasons that have
-    nothing to do with the code under test. Applying the defaults here keeps the
-    stub faithful to the real session.
-    """
-    mapper = inspect(type(instance)).mapper
-
-    for column in mapper.columns:
-        key = mapper.get_property_by_column(column).key
-        if getattr(instance, key, None) is not None:
-            continue
-
-        default = column.default
-        if default is not None:
-            if default.is_callable:
-                setattr(instance, key, default.arg({}))
-            elif default.is_scalar:
-                setattr(instance, key, default.arg)
-        elif column.server_default is not None and isinstance(column.type, DateTime):
-            setattr(instance, key, datetime.now(UTC))
 
 
 @pytest.fixture
@@ -206,6 +191,76 @@ async def admin_client(
         transport=ASGITransport(app=app),
         base_url="http://test",
         headers=admin_headers,
+    ) as client:
+        yield client
+
+    app.dependency_overrides.clear()
+
+
+# --- Protocol-typed fakes -------------------------------------------------
+#
+# The fixtures above hand the app a stub *session*; these hand it stores. Prefer
+# these for anything testing authentication policy — they need no database, and
+# nothing in them can be wrong about how SQLAlchemy behaves, because none of
+# them is pretending to be SQLAlchemy. See `tests/fakes.py`.
+
+
+@pytest.fixture
+def user_store() -> InMemoryUserStore:
+    """An empty in-memory `UserStore`. Append to `.users` to seed it."""
+    return InMemoryUserStore()
+
+
+@pytest.fixture
+def token_store() -> InMemoryRefreshTokenStore:
+    """An empty in-memory `RefreshTokenStore`."""
+    return InMemoryRefreshTokenStore()
+
+
+@pytest.fixture
+def uow() -> RecordingUnitOfWork:
+    """A `UnitOfWork` that counts commits and flushes instead of doing them."""
+    return RecordingUnitOfWork()
+
+
+@pytest.fixture
+def publisher() -> CollectingPublisher:
+    """An `EventPublisher` that keeps every event it is handed."""
+    return CollectingPublisher()
+
+
+@pytest.fixture
+def auth_service(
+    user_store: InMemoryUserStore,
+    token_store: InMemoryRefreshTokenStore,
+    uow: RecordingUnitOfWork,
+    publisher: CollectingPublisher,
+) -> AuthService:
+    """The real `AuthService` with every collaborator faked.
+
+    The service under test is the production one — only what it talks to is
+    substituted, which is the difference between testing the policy and testing
+    a mock's `side_effect` list.
+    """
+    return AuthService(users=user_store, tokens=token_store, uow=uow, events=publisher)
+
+
+@pytest.fixture
+async def fake_backed_client(
+    auth_service: AuthService,
+) -> AsyncGenerator[AsyncClient, None]:
+    """A client whose auth routes run the real service over in-memory stores.
+
+    Overrides `get_auth_service` rather than the four providers underneath it,
+    so the fixture composing the service and the app resolving it agree by
+    construction. `get_db` is left untouched and never called: nothing in the
+    resolved dependency tree reaches it, which is the assertion
+    `test_dependency_inversion.py` makes explicitly.
+    """
+    app.dependency_overrides[get_auth_service] = lambda: auth_service
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         yield client
 

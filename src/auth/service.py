@@ -1,8 +1,6 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.auth.schemas import RegisterRequest, TokenResponse, UserResponse
 from src.auth.utils import (
     create_access_token,
@@ -11,12 +9,12 @@ from src.auth.utils import (
     hash_password,
     verify_password,
 )
-from src.events.bus import EventBus, event_bus
+from src.events.base import EventPublisher
 from src.events.catalog import UserLoggedIn, UserRegistered
 from src.exceptions import ConflictError, ForbiddenError, UnauthorizedError
 from src.models.user import User
-from src.repositories.refresh_token import RefreshTokenRepository
-from src.repositories.user import UserRepository
+from src.repositories.protocols import RefreshTokenStore, UserStore
+from src.unit_of_work import UnitOfWork
 
 
 class AuthService:
@@ -38,15 +36,28 @@ class AuthService:
     rolled back would be reacting to a user who does not exist, and a
     subscriber's own failure never travels back to the caller, so a broken
     mail queue cannot fail a registration that already succeeded.
+
+    Nothing it depends on is named concretely. The four collaborators are
+    protocols — two stores, a transaction, a publisher — so substituting the
+    database means handing over a different object rather than convincing a
+    stub to behave like SQLAlchemy. `src/dependencies.py` supplies the real
+    ones; `tests/fakes.py` supplies in-memory ones. Construction is
+    keyword-only because four same-shaped arguments in a row are exactly the
+    signature a positional swap goes unnoticed in.
     """
 
-    def __init__(self, db: AsyncSession, events: EventBus | None = None) -> None:
-        self.db = db
-        self.users = UserRepository(db)
-        self.tokens = RefreshTokenRepository(db)
-        # Injectable so a test can hand over a bus of its own instead of
-        # registering against the process-wide one and racing every other test.
-        self.events = events if events is not None else event_bus
+    def __init__(
+        self,
+        *,
+        users: UserStore,
+        tokens: RefreshTokenStore,
+        uow: UnitOfWork,
+        events: EventPublisher,
+    ) -> None:
+        self.users = users
+        self.tokens = tokens
+        self.uow = uow
+        self.events = events
 
     async def register(self, data: RegisterRequest) -> UserResponse:
         if await self.users.exists_by_email(data.email):
@@ -58,7 +69,7 @@ class AuthService:
         )
         # get_db() never commits on exit, so an uncommitted registration is
         # rolled back when the session closes.
-        await self.db.commit()
+        await self.uow.commit()
 
         response = UserResponse.model_validate(user)
         await self.events.publish(
@@ -80,7 +91,7 @@ class AuthService:
             raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
-        await self.db.commit()
+        await self.uow.commit()
         await self.events.publish(
             UserLoggedIn(user_id=str(user.id), email=user.email, method="password")
         )
@@ -106,7 +117,7 @@ class AuthService:
             raise UnauthorizedError("Refresh token has expired")
 
         stored.revoked = True
-        await self.db.flush()
+        await self.uow.flush()
 
         user = await self.users.get(stored.user_id)
         if user is None:
@@ -115,7 +126,7 @@ class AuthService:
             raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
-        await self.db.commit()
+        await self.uow.commit()
         return tokens
 
     async def oauth_login(self, provider: str, sub: str, email: str) -> TokenResponse:
@@ -140,13 +151,13 @@ class AuthService:
                 user.oauth_provider = provider
                 user.oauth_sub = sub
                 user.is_verified = True
-                await self.db.flush()
+                await self.uow.flush()
 
         if not user.is_active:
             raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
-        await self.db.commit()
+        await self.uow.commit()
 
         user_id, user_email = str(user.id), user.email
         # A first OAuth sign-in is a registration as well as a login, and
@@ -165,7 +176,7 @@ class AuthService:
 
     async def logout(self, refresh_token: str) -> None:
         await self.tokens.revoke(refresh_token)
-        await self.db.commit()
+        await self.uow.commit()
 
     async def _issue_tokens(self, user: User) -> TokenResponse:
         access_token = create_access_token(str(user.id), user.email, user.role)

@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Request, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.oauth import oauth
 from src.auth.schemas import (
@@ -11,8 +10,7 @@ from src.auth.schemas import (
     TokenResponse,
     UserResponse,
 )
-from src.auth.service import AuthService
-from src.database import get_db
+from src.dependencies import AuthServiceDep
 from src.exceptions import BadRequestError
 from src.limiter import limiter
 from src.tasks import send_welcome_email_task
@@ -30,9 +28,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def register(
     request: Request,
     data: RegisterRequest,
-    db: AsyncSession = Depends(get_db),
+    service: AuthServiceDep,
 ) -> UserResponse:
-    service = AuthService(db)
     user = await service.register(data)
     send_welcome_email_task.delay(user.email)
     return user
@@ -47,9 +44,8 @@ async def register(
 async def login(
     request: Request,
     data: LoginRequest,
-    db: AsyncSession = Depends(get_db),
+    service: AuthServiceDep,
 ) -> TokenResponse:
-    service = AuthService(db)
     return await service.login(data.email, data.password)
 
 
@@ -62,9 +58,8 @@ async def login(
 async def refresh(
     request: Request,
     data: RefreshRequest,
-    db: AsyncSession = Depends(get_db),
+    service: AuthServiceDep,
 ) -> TokenResponse:
-    service = AuthService(db)
     return await service.refresh(data.refresh_token)
 
 
@@ -77,9 +72,8 @@ async def refresh(
 async def logout(
     request: Request,
     data: RefreshRequest,
-    db: AsyncSession = Depends(get_db),
+    service: AuthServiceDep,
 ) -> None:
-    service = AuthService(db)
     await service.logout(data.refresh_token)
 
 
@@ -106,7 +100,7 @@ async def google_login(request: Request) -> RedirectResponse:
 @limiter.limit("10/minute")
 async def google_callback(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    service: AuthServiceDep,
 ) -> TokenResponse:
     """Exchange Google authorization code for JWT access and refresh tokens.
 
@@ -130,5 +124,4 @@ async def google_callback(
     except ValueError as exc:
         raise BadRequestError("Invalid user info from Google") from exc
 
-    service = AuthService(db)
     return await service.oauth_login("google", user_info.sub, str(user_info.email))
