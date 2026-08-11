@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from src.exceptions import AppException
 
@@ -120,3 +120,26 @@ class DomainEvent:
         # attribute exists to prevent.
         if "event_name" not in cls.__dict__:
             cls.event_name = cls.__name__
+
+
+@runtime_checkable
+class EventPublisher(Protocol):
+    """The publishing half of the bus, for code that only announces things.
+
+    `AuthService` needs to say a registration happened. It does not subscribe,
+    unsubscribe, inspect the subscriber table or reset it, so depending on the
+    concrete `EventBus` gave it a class whose surface is mostly other people's
+    business — and made "what does registering publish?" a question you could
+    only answer by building a bus.
+
+    The return is `object` rather than `PublishResult` on purpose. `publish`
+    reports which subscribers failed, and a caller that means to act on that
+    should say so by depending on the bus itself; every caller here deliberately
+    ignores it, because a broken mail queue must not fail a registration that
+    has already committed. Promising a `PublishResult` here would oblige every
+    fake publisher to construct one for a value nothing reads.
+    """
+
+    async def publish(self, event: DomainEvent) -> object:
+        """Deliver `event` to whatever is listening."""
+        ...

@@ -91,10 +91,16 @@ Stripe and PayPal adapters behind it, the table of provider differences each
 one absorbs, why amounts are integer minor units with a currency exponent
 table, and how `pending` differs from both success and failure.
 
+## Dependency injection
+[docs/dependency-injection.md](./docs/dependency-injection.md) — the protocols
+`AuthService` depends on instead of repositories and a session, the providers in
+`src/dependencies.py` that supply them, why all three share one session per
+request, and how to override any of it in a test.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
-the refactors it produced, the findings deferred to later spec items, and the
-two HTTP status codes it changed.
+the refactors it produced, the findings it deferred to later spec items and how
+each was closed, and the two HTTP status codes it changed.
 
 ## Spec Progress
 See [SPEC.md](./SPEC.md).
