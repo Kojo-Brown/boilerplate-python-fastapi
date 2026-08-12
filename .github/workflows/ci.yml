@@ -31,8 +31,22 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
+      # uv fetches the interpreter from a python-build-standalone GitHub
+      # release, which answered 503 on the first run of PR #32 and failed the
+      # job before a line of this repo was read. Three attempts with a short
+      # backoff: a real outage still fails the build, a blip no longer does.
+      # The rerun and workflow-dispatch APIs both answer 403 to the automation
+      # token, so the alternative to this is a push per transient failure.
       - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
+        run: |
+          for attempt in 1 2 3; do
+            if uv python install "$PYTHON_VERSION"; then
+              exit 0
+            fi
+            echo "::warning::uv python install failed (attempt $attempt/3), retrying"
+            sleep $((attempt * 5))
+          done
+          exit 1
 
       # --frozen fails the build if uv.lock is out of date with pyproject.toml,
       # so a stale lockfile can never reach main again.
@@ -57,8 +71,22 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
+      # uv fetches the interpreter from a python-build-standalone GitHub
+      # release, which answered 503 on the first run of PR #32 and failed the
+      # job before a line of this repo was read. Three attempts with a short
+      # backoff: a real outage still fails the build, a blip no longer does.
+      # The rerun and workflow-dispatch APIs both answer 403 to the automation
+      # token, so the alternative to this is a push per transient failure.
       - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
+        run: |
+          for attempt in 1 2 3; do
+            if uv python install "$PYTHON_VERSION"; then
+              exit 0
+            fi
+            echo "::warning::uv python install failed (attempt $attempt/3), retrying"
+            sleep $((attempt * 5))
+          done
+          exit 1
 
       - name: Install dependencies
         run: uv sync --all-extras --dev --frozen
@@ -122,8 +150,22 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
+      # uv fetches the interpreter from a python-build-standalone GitHub
+      # release, which answered 503 on the first run of PR #32 and failed the
+      # job before a line of this repo was read. Three attempts with a short
+      # backoff: a real outage still fails the build, a blip no longer does.
+      # The rerun and workflow-dispatch APIs both answer 403 to the automation
+      # token, so the alternative to this is a push per transient failure.
       - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
+        run: |
+          for attempt in 1 2 3; do
+            if uv python install "$PYTHON_VERSION"; then
+              exit 0
+            fi
+            echo "::warning::uv python install failed (attempt $attempt/3), retrying"
+            sleep $((attempt * 5))
+          done
+          exit 1
 
       - name: Install dependencies
         run: uv sync --all-extras --dev --frozen
