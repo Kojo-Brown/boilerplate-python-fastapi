@@ -20,6 +20,11 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "slowapi>=0.1.9",
     "celery[redis]>=5.5.0",
+    # Already present transitively through celery[redis], but `src/idempotency`
+    # imports `redis.asyncio` directly, and a package you import is a package
+    # you depend on — an extra that stops shipping redis one day should be a
+    # resolver error, not an ImportError at start-up.
+    "redis>=6.4.0",
     "boto3>=1.35.0",
 ]
 

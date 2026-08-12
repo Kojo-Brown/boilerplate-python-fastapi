@@ -26,6 +26,23 @@ def _error_body(
     return body
 
 
+def render_app_exception(exc: AppException) -> JSONResponse:
+    """Turn an `AppException` into the response the API returns for it.
+
+    Split out of the handler below because the handler is not the only caller.
+    Exception handlers are installed *inside* the middleware stack, so a
+    middleware that short-circuits a request — `IdempotencyMiddleware` refusing
+    a reused key, say — never reaches them and has to render the envelope
+    itself. Sharing this function is what keeps those errors the same shape as
+    every other error in this API instead of a second, nearly-identical one.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_error_body(exc.error_code, exc.message, exc.status_code, exc.details),
+        headers=exc.headers,
+    )
+
+
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
     logger.warning(
         "application_exception",
@@ -34,11 +51,7 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
         status_code=exc.status_code,
         path=str(request.url.path),
     )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=_error_body(exc.error_code, exc.message, exc.status_code, exc.details),
-        headers=exc.headers,
-    )
+    return render_app_exception(exc)
 
 
 async def http_exception_handler(
