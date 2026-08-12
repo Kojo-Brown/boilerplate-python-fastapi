@@ -28,6 +28,27 @@ class Settings(BaseSettings):
     # Redis (Celery broker + backend)
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # Idempotency (see src/idempotency/factory.py and
+    # src/middleware/idempotency.py). The store is separate from Celery's use of
+    # Redis only by key namespace; IDEMPOTENCY_REDIS_URL overrides REDIS_URL for
+    # deployments that want a different instance or database number.
+    #
+    # The reservation TTL bounds how long a crashed worker can make retries of
+    # its request wait, so it must sit above the slowest request this API
+    # serves — expiring under a still-running request lets a retry execute
+    # beside it. The record TTL is how long a completed response stays
+    # replayable, which is a client-retry-window question, not a server one.
+    IDEMPOTENCY_ENABLED: bool = True
+    IDEMPOTENCY_BACKEND: Literal["redis", "memory"] = "redis"
+    IDEMPOTENCY_REDIS_URL: str = ""
+    IDEMPOTENCY_TTL_SECONDS: int = 86400  # 24h
+    IDEMPOTENCY_RESERVATION_TTL_SECONDS: int = 60
+    IDEMPOTENCY_MAX_BODY_BYTES: int = 1048576  # 1 MiB
+    # Serve requests without deduplication when the store is unreachable.
+    # Leaving this false trades availability for exactly-once execution, which
+    # is the right trade for anything that moves money.
+    IDEMPOTENCY_FAIL_OPEN: bool = False
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

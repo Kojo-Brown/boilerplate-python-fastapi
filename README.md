@@ -97,6 +97,13 @@ table, and how `pending` differs from both success and failure.
 `src/dependencies.py` that supply them, why all three share one session per
 request, and how to override any of it in a test.
 
+## Idempotent requests
+[docs/idempotency.md](./docs/idempotency.md) — the `Idempotency-Key` middleware,
+what a client sends and gets back, why a reused key with a different payload is
+a 422 and a concurrent one a 409, which responses are deliberately *not* stored,
+why reservations and completed records have different TTLs, and what
+idempotency still does not give you.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

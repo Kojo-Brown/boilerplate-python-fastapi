@@ -19,8 +19,10 @@ from src.exception_handlers import (
 )
 from src.exceptions import AppException
 from src.health import router as health_router
+from src.idempotency.factory import get_idempotency_store
 from src.limiter import limiter
 from src.logging_config import configure_logging
+from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
 from src.middleware.request_id import RequestIDMiddleware
 
 
@@ -34,6 +36,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Nothing is in flight by the time this runs — publish awaits its
     # subscribers — so dropping the registrations is all shutdown needs.
     event_bus.clear()
+    # The idempotency store owns a connection pool. Closing it here rather than
+    # leaving it to garbage collection keeps a reload from leaking sockets.
+    await get_idempotency_store().close()
 
 
 app = FastAPI(
@@ -49,6 +54,21 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # typ
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
+# Added before RequestIDMiddleware, which means it runs *inside* it: Starlette
+# runs the last-added middleware outermost. That ordering is deliberate — see
+# the module docstring in src/middleware/idempotency.py — so that idempotency
+# logs carry the replaying request's id and a replayed response is stamped with
+# a fresh X-Request-ID rather than the original request's.
+app.add_middleware(
+    IdempotencyMiddleware,
+    store=get_idempotency_store(),
+    config=IdempotencyConfig(
+        max_request_body_bytes=settings.IDEMPOTENCY_MAX_BODY_BYTES,
+        max_response_body_bytes=settings.IDEMPOTENCY_MAX_BODY_BYTES,
+        fail_open=settings.IDEMPOTENCY_FAIL_OPEN,
+        enabled=settings.IDEMPOTENCY_ENABLED,
+    ),
+)
 app.add_middleware(RequestIDMiddleware)
 
 

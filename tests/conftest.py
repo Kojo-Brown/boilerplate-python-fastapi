@@ -12,6 +12,11 @@ os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 os.environ.setdefault("REFRESH_TOKEN_EXPIRE_DAYS", "7")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+# The app under test gets the in-process idempotency store, so importing
+# `src.main` never opens a Redis connection pool and the suite runs without a
+# server. The Redis store itself is covered directly, against a real server,
+# in `test_idempotency_contract.py` and `test_idempotency_redis.py`.
+os.environ.setdefault("IDEMPOTENCY_BACKEND", "memory")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
