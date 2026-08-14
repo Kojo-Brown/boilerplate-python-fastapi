@@ -66,6 +66,52 @@ class ConflictError(AppException):
         super().__init__(message, details)
 
 
+class PreconditionFailedError(AppException):
+    """The request's `If-Match` did not describe the resource's current state.
+
+    Distinct from `ConflictError` on purpose. A 409 says the request conflicts
+    with the resource's rules — a duplicate email, an order already refunded —
+    and repeating it verbatim will fail the same way. A 412 says the request
+    was fine but out of date: re-read, reapply, retry, and it succeeds. Folding
+    the two together would tell a client to give up on the recoverable case.
+    """
+
+    status_code = status.HTTP_412_PRECONDITION_FAILED
+    error_code = "PRECONDITION_FAILED"
+
+    def __init__(
+        self,
+        message: str = "Precondition failed",
+        details: object = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(message, details)
+        if headers is not None:
+            # Shadows the class attribute for this instance. The header a 412
+            # wants to carry is the resource's *current* ETag, which is a
+            # per-occurrence value and cannot live on the class the way the
+            # 401 challenge does.
+            self.headers = headers
+
+
+class PreconditionRequiredError(AppException):
+    """An unsafe request arrived without the `If-Match` its route requires.
+
+    RFC 6585 §3 exists for precisely this: without it the honest alternatives
+    are to accept the blind write, or to answer 403/400 and leave the client
+    guessing which of its headers the server wanted.
+    """
+
+    status_code = status.HTTP_428_PRECONDITION_REQUIRED
+    error_code = "PRECONDITION_REQUIRED"
+
+    def __init__(
+        self, message: str = "Precondition required", details: object = None
+    ) -> None:
+        super().__init__(message, details)
+
+
 class UnprocessableEntityError(AppException):
     status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "UNPROCESSABLE_ENTITY"

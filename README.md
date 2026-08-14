@@ -104,6 +104,13 @@ a 422 and a concurrent one a 409, which responses are deliberately *not* stored,
 why reservations and completed records have different TTLs, and what
 idempotency still does not give you.
 
+## Optimistic concurrency
+[docs/optimistic-concurrency.md](./docs/optimistic-concurrency.md) — the lost
+update and why isolation levels do not fix it, the `version_id_col` on `User`,
+the `ETag` and `If-Match` protocol on `/api/v1/users/me`, why the precondition
+is checked both in the service and in the UPDATE's WHERE clause, and how to put
+the same guard on another resource.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
