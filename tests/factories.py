@@ -34,6 +34,11 @@ class UserFactory(factory.Factory):
     oauth_sub = None
     notification_channel = "email"
     notification_webhook_url = None
+    # A row that came from the database always has one: SQLAlchemy populates
+    # the version counter on INSERT, and `apply_column_defaults` cannot infer
+    # it, because the ORM sets it rather than any column default. Leaving it
+    # `None` would give every factory-built user an ETag of "<id>.None".
+    version = 1
 
     class Params:
         inactive = factory.Trait(is_active=False)

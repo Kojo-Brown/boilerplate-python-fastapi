@@ -115,6 +115,9 @@ def mock_user() -> User:
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         notification_channel="email",
+        # As a row loaded from the database would be: the ORM owns this
+        # counter, so nothing in `apply_column_defaults` can supply it.
+        version=1,
     )
 
 
@@ -131,6 +134,9 @@ def mock_admin() -> User:
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         notification_channel="email",
+        # As a row loaded from the database would be: the ORM owns this
+        # counter, so nothing in `apply_column_defaults` can supply it.
+        version=1,
     )
 
 

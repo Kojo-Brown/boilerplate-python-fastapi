@@ -49,13 +49,16 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.auth.dependencies import get_current_user
 from src.auth.service import AuthService
+from src.concurrency import IfMatch
 from src.database import get_db
 from src.events.base import EventPublisher
 from src.events.bus import event_bus
+from src.models.user import User
 from src.payments.base import PaymentGateway
 from src.payments.registry import get_payment_gateway
 from src.repositories.protocols import RefreshTokenStore, UserStore
@@ -64,6 +67,7 @@ from src.repositories.user import UserRepository
 from src.storage.base import StorageBackend
 from src.storage.factory import get_storage
 from src.unit_of_work import UnitOfWork
+from src.users.service import ProfileService
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -100,6 +104,33 @@ def get_event_publisher() -> EventPublisher:
     return event_bus
 
 
+def get_if_match(
+    if_match: Annotated[list[str] | None, Header(alias="If-Match")] = None,
+) -> IfMatch:
+    """Parse the request's `If-Match`, or record that there wasn't one.
+
+    Declared as a list because a header field may legally arrive as several
+    field lines, which RFC 9110 §5.3 says to treat as one comma-separated
+    value. Taking a `str` here would silently read only the first of them and
+    ignore tags the client sent — the sort of bug that shows up as an
+    unexplained 412 for one client library and never for the others.
+
+    A malformed value raises `MalformedPreconditionError` (400) from inside
+    dependency resolution, which reaches the same `AppException` handler as
+    everything else, so the error envelope is the usual one.
+    """
+    if not if_match:
+        return IfMatch.absent()
+    return IfMatch.parse(", ".join(if_match))
+
+
+def get_profile_service(
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+) -> ProfileService:
+    """Profile reads and conditional writes over this request's transaction."""
+    return ProfileService(uow)
+
+
 def get_auth_service(
     users: Annotated[UserStore, Depends(get_user_store)],
     tokens: Annotated[RefreshTokenStore, Depends(get_refresh_token_store)],
@@ -110,6 +141,9 @@ def get_auth_service(
     return AuthService(users=users, tokens=tokens, uow=uow, events=events)
 
 
+CurrentUserDep = Annotated[User, Depends(get_current_user)]
+IfMatchDep = Annotated[IfMatch, Depends(get_if_match)]
+ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 UserStoreDep = Annotated[UserStore, Depends(get_user_store)]
 RefreshTokenStoreDep = Annotated[RefreshTokenStore, Depends(get_refresh_token_store)]
 UnitOfWorkDep = Annotated[UnitOfWork, Depends(get_unit_of_work)]
@@ -126,15 +160,20 @@ PaymentGatewayDep = Annotated[PaymentGateway, Depends(get_payment_gateway)]
 
 __all__ = [
     "AuthServiceDep",
+    "CurrentUserDep",
     "DbSession",
     "EventPublisherDep",
+    "IfMatchDep",
     "PaymentGatewayDep",
+    "ProfileServiceDep",
     "RefreshTokenStoreDep",
     "StorageDep",
     "UnitOfWorkDep",
     "UserStoreDep",
     "get_auth_service",
     "get_event_publisher",
+    "get_if_match",
+    "get_profile_service",
     "get_refresh_token_store",
     "get_unit_of_work",
     "get_user_store",
