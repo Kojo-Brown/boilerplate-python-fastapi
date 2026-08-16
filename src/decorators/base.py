@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import functools
 import inspect
+import random
 import time
 from collections.abc import Awaitable, Callable
+from typing import Final
 
 #: Returns a monotonically increasing number of seconds. `time.monotonic` for
 #: expiry decisions, `time.perf_counter` for measuring a duration — never
@@ -84,6 +86,53 @@ def default_event_name(func: object) -> str:
     module = getattr(target, "__module__", None) or type(target).__module__
     qualname = getattr(target, "__qualname__", None) or type(target).__qualname__
     return f"{module}.{qualname}"
+
+
+# `base_delay * 2 ** (attempt - 1)` is an int power, and `0.1 * 2 ** 2000`
+# raises OverflowError rather than returning inf. Capping the exponent keeps a
+# misconfigured `attempts` from turning into a crash inside the backoff maths;
+# 2**32 seconds already exceeds any sane `max_delay`, so the cap never bites in
+# a configuration that was going to work anyway.
+MAX_BACKOFF_EXPONENT: Final[int] = 32
+
+#: Shared jitter source. Module-level so the default is one stream rather than
+#: a new `Random` per decoration; tests pass a seeded instance instead.
+DEFAULT_RNG: Final[random.Random] = random.Random()
+
+
+def backoff_delay(
+    attempt: int,
+    *,
+    base_delay: float,
+    max_delay: float,
+    jitter: bool,
+    rng: random.Random,
+) -> float:
+    """Full-jitter exponential backoff for the wait after `attempt`.
+
+    The ceiling doubles per attempt and is clamped by `max_delay`; with jitter
+    on, the actual wait is drawn uniformly from `[0, ceiling]`. Full jitter
+    rather than the ceiling itself because the failure being retried is usually
+    shared — a database that just fell over disappoints every worker at once,
+    and a deadlock is by definition a fight between concurrent transactions —
+    so un-jittered backoff marches the losers back in step and the retry storm
+    lands as one spike instead of spreading out. For deadlocks specifically it
+    is worse than a spike: two transactions that retry in lockstep can deadlock
+    against each other again on the same pair of rows.
+
+    Lives here rather than in either caller because there are two retry loops
+    in this codebase — `src/decorators/retry.py` for transient call failures
+    and `src/locking/retry.py` for database conflicts — and a backoff policy
+    that drifts between them is a difference nobody would notice until a
+    production incident made one of them behave unlike the other.
+
+    `attempt` is 1-based: the wait after the first failure uses `base_delay`.
+    """
+    exponent = min(attempt - 1, MAX_BACKOFF_EXPONENT)
+    ceiling = min(max_delay, base_delay * (2.0**exponent))
+    if not jitter:
+        return ceiling
+    return rng.uniform(0.0, ceiling)
 
 
 def duration_ms(seconds: float) -> float:
