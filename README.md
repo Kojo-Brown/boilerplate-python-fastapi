@@ -111,6 +111,14 @@ the `ETag` and `If-Match` protocol on `/api/v1/users/me`, why the precondition
 is checked both in the service and in the UPDATE's WHERE clause, and how to put
 the same guard on another resource.
 
+## Pessimistic locking
+[docs/pessimistic-locking.md](./docs/pessimistic-locking.md) — `lock_row`,
+`lock_rows` and `lock_timeout` over `SELECT ... FOR UPDATE`, when to prefer this
+to optimistic concurrency and when not to, the four lock modes and which one
+quietly blocks foreign-key inserts, the stale-copy trap an ORM sets under every
+row lock, and the deadlock-retry wrapper — including why `@retry` from
+`src/decorators` cannot do that job.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

@@ -28,13 +28,15 @@ import functools
 import random
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Final, ParamSpec, TypeVar, overload
+from typing import Any, ParamSpec, TypeVar, overload
 
 import structlog
 
 from src.decorators.base import (
+    DEFAULT_RNG,
     AsyncSleeper,
     SyncSleeper,
+    backoff_delay,
     default_event_name,
     is_async_callable,
 )
@@ -47,15 +49,6 @@ R = TypeVar("R")
 ExceptionTypes = type[BaseException] | tuple[type[BaseException], ...]
 
 RetryPredicate = Callable[[BaseException], bool]
-
-# `base_delay * 2 ** (attempt - 1)` is an int power, and `0.1 * 2 ** 2000`
-# raises OverflowError rather than returning inf. Capping the exponent keeps a
-# misconfigured `attempts` from turning into a crash inside the backoff maths;
-# 2**32 seconds already exceeds any sane `max_delay`, so the cap never bites in
-# a configuration that was going to work anyway.
-_MAX_BACKOFF_EXPONENT: Final[int] = 32
-
-_DEFAULT_RNG: Final[random.Random] = random.Random()
 
 
 class RetryDecorator:
@@ -196,20 +189,14 @@ class RetryDecorator:
         return isinstance(exc, self._on)
 
     def _delay_for(self, attempt: int) -> float:
-        """Full-jitter exponential backoff for the wait after `attempt`.
-
-        The ceiling doubles per attempt and is clamped by `max_delay`; with
-        jitter on, the actual wait is drawn uniformly from `[0, ceiling]`. Full
-        jitter rather than the ceiling itself because the failure being
-        retried is usually shared — a database that just fell over disappoints
-        every worker at once — and un-jittered backoff marches them all back in
-        step, so the retry storm lands as one spike instead of spreading out.
-        """
-        exponent = min(attempt - 1, _MAX_BACKOFF_EXPONENT)
-        ceiling = min(self._max_delay, self._base_delay * (2.0**exponent))
-        if not self._jitter:
-            return ceiling
-        return self._rng.uniform(0.0, ceiling)
+        """The wait after `attempt`. See `backoff_delay` for the policy."""
+        return backoff_delay(
+            attempt,
+            base_delay=self._base_delay,
+            max_delay=self._max_delay,
+            jitter=self._jitter,
+            rng=self._rng,
+        )
 
 
 def retry(
@@ -221,7 +208,7 @@ def retry(
     base_delay: float = 0.1,
     max_delay: float = 5.0,
     jitter: bool = True,
-    rng: random.Random = _DEFAULT_RNG,
+    rng: random.Random = DEFAULT_RNG,
     sleep: SyncSleeper = time.sleep,
     asleep: AsyncSleeper = asyncio.sleep,
     event: str | None = None,
