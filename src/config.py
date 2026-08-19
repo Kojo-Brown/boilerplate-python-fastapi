@@ -49,6 +49,25 @@ class Settings(BaseSettings):
     # is the right trade for anything that moves money.
     IDEMPOTENCY_FAIL_OPEN: bool = False
 
+    # Distributed locking (see src/distributed_lock/). Shares the Redis server
+    # with Celery and the idempotency store by default, separated by key
+    # namespace; DISTRIBUTED_LOCK_REDIS_URL overrides REDIS_URL for deployments
+    # that want a different instance or database number.
+    #
+    # The backend must be "redis" anywhere more than one process runs: "memory"
+    # coordinates callers inside a single process and nothing beyond it, and it
+    # hands out fencing tokens that only make sense within that process.
+    #
+    # The TTL bounds how long a crashed holder blocks a name, so it is a
+    # trade-off rather than a maximum: too short and a slow section loses its
+    # lease mid-flight, too long and a killed worker locks the name for that
+    # long. Pass `renew_interval` to DistributedLock for a section whose
+    # duration is unpredictable, rather than raising this.
+    DISTRIBUTED_LOCK_BACKEND: Literal["redis", "memory"] = "redis"
+    DISTRIBUTED_LOCK_REDIS_URL: str = ""
+    DISTRIBUTED_LOCK_NAMESPACE: str = "dlock"
+    DISTRIBUTED_LOCK_TTL_SECONDS: float = 30.0
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
