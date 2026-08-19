@@ -56,6 +56,8 @@ from src.auth.dependencies import get_current_user
 from src.auth.service import AuthService
 from src.concurrency import IfMatch
 from src.database import get_db
+from src.distributed_lock.base import LockBackend
+from src.distributed_lock.factory import get_lock_backend
 from src.events.base import EventPublisher
 from src.events.bus import event_bus
 from src.models.user import User
@@ -157,6 +159,12 @@ AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 # connection pools, and rebuilding one per request would throw the pool away.
 StorageDep = Annotated[StorageBackend, Depends(get_storage)]
 PaymentGatewayDep = Annotated[PaymentGateway, Depends(get_payment_gateway)]
+# The *backend*, not a lock: which name to take, for how long, and whether to
+# wait for it are properties of the section being protected, so a handler
+# builds its own `DistributedLock` around this. A provider that returned an
+# already-acquired lock would have to take the lock during dependency
+# resolution, which is before the handler exists to be protected.
+LockBackendDep = Annotated[LockBackend, Depends(get_lock_backend)]
 
 __all__ = [
     "AuthServiceDep",
@@ -164,6 +172,7 @@ __all__ = [
     "DbSession",
     "EventPublisherDep",
     "IfMatchDep",
+    "LockBackendDep",
     "PaymentGatewayDep",
     "ProfileServiceDep",
     "RefreshTokenStoreDep",

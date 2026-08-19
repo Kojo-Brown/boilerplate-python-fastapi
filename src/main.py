@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from src.config import settings
+from src.distributed_lock.factory import get_lock_backend
 from src.events.bus import event_bus
 from src.events.subscribers import register_default_subscribers
 from src.exception_handlers import (
@@ -39,6 +40,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # The idempotency store owns a connection pool. Closing it here rather than
     # leaving it to garbage collection keeps a reload from leaking sockets.
     await get_idempotency_store().close()
+    # Same for the distributed lock backend. Building it here when nothing has
+    # asked for one yet costs nothing: redis-py connects lazily, so an unused
+    # backend closes a pool that never opened a socket.
+    await get_lock_backend().close()
 
 
 app = FastAPI(

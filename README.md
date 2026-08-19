@@ -119,6 +119,13 @@ quietly blocks foreign-key inserts, the stale-copy trap an ORM sets under every
 row lock, and the deadlock-retry wrapper — including why `@retry` from
 `src/decorators` cannot do that job.
 
+## Distributed locking
+[docs/distributed-locking.md](./docs/distributed-locking.md) — leases and
+fencing tokens in `src/distributed_lock`, why a lock alone cannot stop a paused
+holder from writing and what the token does about it, the `async with` API with
+its bounded wait and optional renewal, and the two Redis keys per lock —
+including the counter that must never be evicted.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
