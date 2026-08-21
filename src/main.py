@@ -25,6 +25,7 @@ from src.limiter import limiter
 from src.logging_config import configure_logging
 from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
 from src.middleware.request_id import RequestIDMiddleware
+from src.parallel.factory import get_cpu_pool
 
 
 @asynccontextmanager
@@ -33,6 +34,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # At start-up rather than at import, so that importing a module never
     # turns on a side effect and a unit test gets an empty bus by default.
     register_default_subscribers()
+    # Builds the executor; the worker processes themselves are spawned lazily on
+    # the first offload, so a deployment that never uses it pays nothing and the
+    # first health check is not queued behind several interpreter start-ups.
+    get_cpu_pool().start()
     yield
     # Nothing is in flight by the time this runs — publish awaits its
     # subscribers — so dropping the registrations is all shutdown needs.
@@ -44,6 +49,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # asked for one yet costs nothing: redis-py connects lazily, so an unused
     # backend closes a pool that never opened a socket.
     await get_lock_backend().close()
+    # Last, and waiting: the pool owns child processes rather than sockets, and
+    # a child killed mid-call leaves a half-written result nobody reads. Waiting
+    # here is what makes SIGTERM an orderly drain instead of a truncation, and
+    # it costs nothing when nothing is in flight.
+    await get_cpu_pool().shutdown()
 
 
 app = FastAPI(

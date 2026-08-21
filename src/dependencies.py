@@ -61,6 +61,8 @@ from src.distributed_lock.factory import get_lock_backend
 from src.events.base import EventPublisher
 from src.events.bus import event_bus
 from src.models.user import User
+from src.parallel.cpu import CpuPool
+from src.parallel.factory import get_cpu_pool
 from src.payments.base import PaymentGateway
 from src.payments.registry import get_payment_gateway
 from src.repositories.protocols import RefreshTokenStore, UserStore
@@ -165,9 +167,16 @@ PaymentGatewayDep = Annotated[PaymentGateway, Depends(get_payment_gateway)]
 # already-acquired lock would have to take the lock during dependency
 # resolution, which is before the handler exists to be protected.
 LockBackendDep = Annotated[LockBackend, Depends(get_lock_backend)]
+# Process-wide and started by the lifespan, so this is the same instance for
+# every request — see `get_cpu_pool` for why one per request would be a bug
+# rather than an inefficiency. A handler asks for the pool and offloads its own
+# call; there is no provider that returns a *result*, because what to run and
+# how long to allow it are properties of the work, not of the pool.
+CpuPoolDep = Annotated[CpuPool, Depends(get_cpu_pool)]
 
 __all__ = [
     "AuthServiceDep",
+    "CpuPoolDep",
     "CurrentUserDep",
     "DbSession",
     "EventPublisherDep",
@@ -180,6 +189,7 @@ __all__ = [
     "UnitOfWorkDep",
     "UserStoreDep",
     "get_auth_service",
+    "get_cpu_pool",
     "get_event_publisher",
     "get_if_match",
     "get_profile_service",

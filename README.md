@@ -126,6 +126,16 @@ holder from writing and what the token does about it, the `async with` API with
 its bounded wait and optional renewal, and the two Redis keys per lock —
 including the counter that must never be evicted.
 
+## Parallel execution
+[docs/parallel-execution.md](./docs/parallel-execution.md) — the two reasons a
+handler stops the event loop and why their fixes are opposites: `CpuPool` in
+`src/parallel/cpu.py` for compute (why `spawn` rather than `fork` is a
+correctness question, why a deadline has to be armed inside the worker to get
+the slot back, admission control instead of an unbounded queue, and recovery
+from an OOM-killed child), and `gather_bounded` in `src/parallel/io.py` for
+IO — including the two things wrong with plain `asyncio.gather`, both of which
+are asserted against `asyncio` itself in the test suite.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
