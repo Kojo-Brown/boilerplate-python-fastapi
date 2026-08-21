@@ -68,6 +68,37 @@ class Settings(BaseSettings):
     DISTRIBUTED_LOCK_NAMESPACE: str = "dlock"
     DISTRIBUTED_LOCK_TTL_SECONDS: float = 30.0
 
+    # Parallel execution (see src/parallel/). Two unrelated bounds that happen
+    # to live next to each other: how much CPU-bound work may be offloaded to
+    # worker processes, and how much outbound IO may be in flight at once.
+    #
+    # CPU_POOL_MAX_WORKERS is 0 for "derive it", which subtracts one from the
+    # CPU allowance this process actually has — not the host's core count, which
+    # in a container is a much larger and quite unrelated number. Set it
+    # explicitly only when the pod's CPU limit is not what the runtime reports.
+    # Remember that uvicorn's own --workers multiplies this: four server
+    # workers with four pool workers each is sixteen child processes.
+    #
+    # The start method must not be "fork" — CpuPool refuses it, because a fork
+    # of an async server inherits its open database sockets and any lock held by
+    # a thread that did not survive. "forkserver" is cheaper per worker than
+    # "spawn" and equally safe; "spawn" is the portable default.
+    #
+    # QUEUE_DEPTH_PER_WORKER bounds what waits for a busy pool: past
+    # workers * (1 + depth), calls are refused with 503 rather than queued.
+    # Queued calls hold their pickled arguments in this process's memory, so
+    # raising it trades memory and latency for burst tolerance.
+    CPU_POOL_MAX_WORKERS: int = 0
+    CPU_POOL_MAX_TASKS_PER_CHILD: int = 100
+    CPU_POOL_QUEUE_DEPTH_PER_WORKER: int = 4
+    CPU_POOL_START_METHOD: Literal["spawn", "forkserver"] = "spawn"
+
+    # The ceiling on concurrent outbound calls for fan-outs that share it.
+    # A per-call limit does not compose — `limit=8` inside a handler serving
+    # fifty concurrent requests is four hundred sockets — so the real bound has
+    # to be process-wide. See src/parallel/factory.py.
+    OUTBOUND_CONCURRENCY_LIMIT: int = 20
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
