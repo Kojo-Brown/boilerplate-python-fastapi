@@ -128,10 +128,12 @@ def register_default_subscribers(
     return tuple(registered)
 
 
-__all__: Final[list[str]] = [
+# A tuple, not a list. `Final` would leave `__all__.append(...)` legal, and the
+# export list of a module is not something an importer gets to extend.
+__all__: Final[tuple[str, ...]] = (
     "DEFAULT_SUBSCRIBERS",
     "SubscriberSpec",
     "record_user_activity",
     "register_default_subscribers",
     "send_welcome_email_on_registration",
-]
+)

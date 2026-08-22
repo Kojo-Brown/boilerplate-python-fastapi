@@ -1,13 +1,32 @@
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Configuration, read once from the environment and never afterwards.
+
+    `frozen=True` is load-bearing rather than tidy. Several things in this
+    codebase already assume settings do not move: `get_strategy` is `@cache`d
+    per channel, `StorageFactory` and `PaymentGatewayRegistry` build their
+    instances from a `Settings` at first use, and the idempotency and lock
+    backends are constructed once in the lifespan. Under a mutable singleton,
+    `settings.PAYMENT_GATEWAY = "paypal"` is a line that type-checks, appears
+    to work, and takes effect for some subsystems and not others depending on
+    what has already been built — the worst failure shape available, because
+    every individual piece is behaving exactly as designed.
+
+    A test that needs different configuration constructs its own
+    `Settings(...)` and passes it in; every factory here takes one for exactly
+    that reason. That is a better seam than mutating the global, since it
+    cannot leak into the next test.
+    """
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        frozen=True,
     )
 
     DATABASE_URL: str
@@ -147,4 +166,4 @@ class Settings(BaseSettings):
     PAYPAL_API_BASE_URL: str = "https://api-m.sandbox.paypal.com"
 
 
-settings = Settings()
+settings: Final[Settings] = Settings()

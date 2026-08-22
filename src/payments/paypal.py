@@ -35,6 +35,7 @@ from typing import Any, Final, NoReturn
 import httpx
 import structlog
 
+from src.immutable import FrozenDict
 from src.payments.base import (
     ChargeRequest,
     Money,
@@ -58,30 +59,36 @@ LIVE_API_BASE_URL: Final[str] = "https://api-m.paypal.com"
 # valid when checked and stale when it arrives is the failure this avoids.
 TOKEN_EXPIRY_SKEW_SECONDS: Final[float] = 60.0
 
-_ORDER_STATUS: Final[dict[str, PaymentStatus]] = {
-    "COMPLETED": "succeeded",
-    "CREATED": "pending",
-    "SAVED": "pending",
-    "APPROVED": "pending",
-    "PAYER_ACTION_REQUIRED": "pending",
-    "VOIDED": "failed",
-}
+_ORDER_STATUS: Final[FrozenDict[str, PaymentStatus]] = FrozenDict[str, PaymentStatus](
+    {
+        "COMPLETED": "succeeded",
+        "CREATED": "pending",
+        "SAVED": "pending",
+        "APPROVED": "pending",
+        "PAYER_ACTION_REQUIRED": "pending",
+        "VOIDED": "failed",
+    }
+)
 
-_CAPTURE_STATUS: Final[dict[str, PaymentStatus]] = {
-    "COMPLETED": "succeeded",
-    "PENDING": "pending",
-    "PARTIALLY_REFUNDED": "succeeded",
-    "REFUNDED": "succeeded",
-    "DECLINED": "failed",
-    "FAILED": "failed",
-}
+_CAPTURE_STATUS: Final[FrozenDict[str, PaymentStatus]] = FrozenDict[str, PaymentStatus](
+    {
+        "COMPLETED": "succeeded",
+        "PENDING": "pending",
+        "PARTIALLY_REFUNDED": "succeeded",
+        "REFUNDED": "succeeded",
+        "DECLINED": "failed",
+        "FAILED": "failed",
+    }
+)
 
-_REFUND_STATUS: Final[dict[str, RefundStatus]] = {
-    "COMPLETED": "succeeded",
-    "PENDING": "pending",
-    "CANCELLED": "failed",
-    "FAILED": "failed",
-}
+_REFUND_STATUS: Final[FrozenDict[str, RefundStatus]] = FrozenDict[str, RefundStatus](
+    {
+        "COMPLETED": "succeeded",
+        "PENDING": "pending",
+        "CANCELLED": "failed",
+        "FAILED": "failed",
+    }
+)
 
 # PayPal reports a refused instrument as a 422 with an issue code rather than a
 # distinct status, so the decline has to be recognised by name.

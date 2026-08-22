@@ -81,7 +81,11 @@ def test_cursor_page_serialization() -> None:
         has_more=True,
     )
     data = page.model_dump()
-    assert data["items"] == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+    # A tuple, not a list: `CursorPage.items` is a snapshot whose `next_cursor`
+    # was computed from its last element, so it is declared `tuple[T, ...]`.
+    # JSON has one array type, so `model_dump_json` is unaffected.
+    assert data["items"] == ({"id": 1, "name": "a"}, {"id": 2, "name": "b"})
+    assert page.model_dump_json().startswith('{"items":[{"id":1,"name":"a"}')
     assert data["next_cursor"] == "abc"
     assert data["has_more"] is True
 
@@ -145,7 +149,7 @@ def test_build_page_cursor_points_to_last_included_item() -> None:
 
 def test_build_page_empty_input() -> None:
     page = build_page([], limit=10, get_cursor=_cursor)
-    assert page.items == []
+    assert page.items == ()
     assert page.has_more is False
     assert page.next_cursor is None
 

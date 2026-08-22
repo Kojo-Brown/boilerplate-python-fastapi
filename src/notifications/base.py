@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import ipaddress
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from src.exceptions import AppException, BadRequestError, UnprocessableEntityError
+from src.immutable import EMPTY_MAPPING, freeze_mapping
 
 MAX_SUBJECT_LENGTH: Final[int] = 200
 
@@ -104,9 +105,22 @@ class Notification:
     body: str
     category: str = "general"
     html_body: str | None = None
-    metadata: Mapping[str, str] = field(default_factory=dict)
+    #: Frozen on construction — see `__post_init__`. Declared as `Mapping` so
+    #: that a caller can pass an ordinary dict and mypy still refuses to write
+    #: through the attribute afterwards.
+    metadata: Mapping[str, str] = EMPTY_MAPPING
 
     def __post_init__(self) -> None:
+        # `frozen=True` blocks assignment to this attribute and nothing else:
+        # it keeps whatever mapping it was handed, so the caller's dict is
+        # still the object behind `self.metadata` and still mutable from where
+        # it was built. Copying into a `FrozenDict` here is what makes the
+        # freeze mean what it says, and it also makes the whole value object
+        # hashable — a `Notification` with a plain dict field raises
+        # `TypeError` from `hash()`, so it could not be an argument to a
+        # `@cached` function or a member of a set.
+        object.__setattr__(self, "metadata", freeze_mapping(self.metadata))
+
         if not self.subject.strip():
             raise BadRequestError("Notification subject must not be empty.")
         if len(self.subject) > MAX_SUBJECT_LENGTH:

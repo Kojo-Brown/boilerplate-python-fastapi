@@ -17,6 +17,7 @@ from src.config import Settings, settings
 from src.distributed_lock.base import LockBackend
 from src.distributed_lock.memory import InMemoryLockBackend
 from src.distributed_lock.redis_backend import RedisLockBackend
+from src.immutable import FrozenDict
 
 logger = structlog.get_logger(__name__)
 
@@ -39,10 +40,12 @@ def _build_memory(config: Settings) -> LockBackend:
     return InMemoryLockBackend()
 
 
-BUILDERS: Final[dict[str, BackendBuilder]] = {
-    "redis": _build_redis,
-    "memory": _build_memory,
-}
+BUILDERS: Final[FrozenDict[str, BackendBuilder]] = FrozenDict[str, BackendBuilder](
+    {
+        "redis": _build_redis,
+        "memory": _build_memory,
+    }
+)
 
 
 def create_lock_backend(

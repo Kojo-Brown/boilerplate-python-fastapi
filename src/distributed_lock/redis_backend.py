@@ -53,6 +53,7 @@ from src.distributed_lock.base import (
     ReleaseOutcome,
     validate_lock_name,
 )
+from src.immutable import FrozenDict
 
 logger = structlog.get_logger(__name__)
 
@@ -100,11 +101,13 @@ redis.call('DEL', KEYS[1])
 return 1
 """
 
-_RELEASE_OUTCOMES: Final[dict[int, ReleaseOutcome]] = {
-    0: ReleaseOutcome.EXPIRED,
-    -1: ReleaseOutcome.NOT_OWNER,
-    1: ReleaseOutcome.RELEASED,
-}
+_RELEASE_OUTCOMES: Final[FrozenDict[int, ReleaseOutcome]] = FrozenDict(
+    {
+        0: ReleaseOutcome.EXPIRED,
+        -1: ReleaseOutcome.NOT_OWNER,
+        1: ReleaseOutcome.RELEASED,
+    }
+)
 
 
 def _decode(raw: object) -> str:

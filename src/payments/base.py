@@ -21,11 +21,12 @@ nothing above `PaymentGateway` ever learns which provider is behind it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Final, Literal, Protocol, runtime_checkable
 
 from src.exceptions import AppException, BadRequestError, NotFoundError
+from src.immutable import EMPTY_MAPPING, FrozenDict, freeze_mapping
 
 MAX_REFERENCE_LENGTH: Final[int] = 128
 
@@ -39,22 +40,29 @@ MAX_DESCRIPTION_LENGTH: Final[int] = 500
 # adding one is a line in this table plus a check that both providers settle
 # it. Zero-decimal (JPY, KRW) and three-decimal (BHD, KWD, TND) entries are
 # here precisely because they are the ones that break a hardcoded 100.
-CURRENCY_EXPONENTS: Final[Mapping[str, int]] = {
-    "AUD": 2,
-    "BHD": 3,
-    "CAD": 2,
-    "CHF": 2,
-    "EUR": 2,
-    "GBP": 2,
-    "JPY": 0,
-    "KRW": 0,
-    "KWD": 3,
-    "NZD": 2,
-    "SEK": 2,
-    "SGD": 2,
-    "TND": 3,
-    "USD": 2,
-}
+#
+# `FrozenDict` rather than a dict literal, because `Final` only forbids
+# rebinding the name: `CURRENCY_EXPONENTS["JPY"] = 2` type-checks under a
+# `dict` annotation, succeeds at runtime, and silently divides every later yen
+# amount by a hundred for the life of the process.
+CURRENCY_EXPONENTS: Final[FrozenDict[str, int]] = FrozenDict(
+    {
+        "AUD": 2,
+        "BHD": 3,
+        "CAD": 2,
+        "CHF": 2,
+        "EUR": 2,
+        "GBP": 2,
+        "JPY": 0,
+        "KRW": 0,
+        "KWD": 3,
+        "NZD": 2,
+        "SEK": 2,
+        "SGD": 2,
+        "TND": 3,
+        "USD": 2,
+    }
+)
 
 # What this application calls the outcome of a charge. Each adapter maps its
 # provider's own vocabulary onto these three; the provider's original string
@@ -291,9 +299,21 @@ class ChargeRequest:
     reference: str
     description: str = ""
     customer_email: str | None = None
-    metadata: Mapping[str, str] = field(default_factory=dict)
+    #: Frozen on construction — see `__post_init__`. Declared as `Mapping` so
+    #: that a caller can pass an ordinary dict and mypy still refuses to write
+    #: through the attribute afterwards.
+    metadata: Mapping[str, str] = EMPTY_MAPPING
 
     def __post_init__(self) -> None:
+        # `frozen=True` stops assignment to this attribute and nothing else —
+        # it keeps the caller's mapping rather than copying it, so the dict the
+        # charge was built from is still the object behind `self.metadata`.
+        # That matters more here than almost anywhere else in this codebase:
+        # both adapters send `metadata` to the provider, so a mutation between
+        # construction and the HTTP call reaches the provider's records while
+        # the request the caller validated says something else.
+        object.__setattr__(self, "metadata", freeze_mapping(self.metadata))
+
         if not self.payment_method_token.strip():
             raise BadRequestError("Payment method token must not be empty.")
 

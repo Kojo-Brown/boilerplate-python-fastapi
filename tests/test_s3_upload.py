@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -237,4 +238,10 @@ def test_presigned_upload_response_fields_typed() -> None:
         expires_in=3600,
     )
     assert resp.expires_in == 3600
-    assert isinstance(resp.fields, dict)
+    # A `Mapping`, not a `dict`. The POST policy's signature covers these
+    # fields, so an edit after signing produces an upload S3 rejects at the
+    # browser with a message about a signature rather than about the edit.
+    assert isinstance(resp.fields, Mapping)
+    assert resp.fields == {"Content-Type": "image/jpeg", "key": "uploads/abc.jpg"}
+    with pytest.raises(TypeError):
+        resp.fields["key"] = "elsewhere"  # type: ignore[index]

@@ -14,11 +14,11 @@ endpoint a load balancer or a `readinessProbe` should poll, and it is what the
 CI start-up smoke test asserts against a real Postgres.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 import structlog
 from fastapi import APIRouter, Depends, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,14 +35,18 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 # reaches SQLAlchemy's wrapping layer, so catching SQLAlchemyError alone would let
 # the most common failure — Postgres simply not listening — escape as a 500 and
 # make the probe useless exactly when it matters.
-_UNREACHABLE = (SQLAlchemyError, OSError)
+_UNREACHABLE: Final[tuple[type[Exception], ...]] = (SQLAlchemyError, OSError)
 
 
 class LivenessResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     status: Literal["ok"]
 
 
 class ReadinessResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     status: Literal["ready", "unavailable"]
     database: Literal["ok", "unreachable"]
 
