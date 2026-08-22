@@ -14,6 +14,7 @@ from typing import ClassVar, Final, Literal
 import structlog
 
 from src.config import Settings, settings
+from src.immutable import FrozenDict
 from src.notifications.base import (
     Notification,
     NotificationResult,
@@ -42,11 +43,13 @@ def _build_webhook(config: Settings) -> NotificationStrategy:
     )
 
 
-DEFAULT_STRATEGIES: Final[dict[str, StrategyBuilder]] = {
-    "email": lambda _: EmailNotificationStrategy(),
-    "webhook": _build_webhook,
-    "none": lambda _: NullNotificationStrategy(),
-}
+DEFAULT_STRATEGIES: Final[FrozenDict[str, StrategyBuilder]] = FrozenDict(
+    {
+        "email": lambda _: EmailNotificationStrategy(),
+        "webhook": _build_webhook,
+        "none": lambda _: NullNotificationStrategy(),
+    }
+)
 
 
 class NotificationStrategyRegistry:

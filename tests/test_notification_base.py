@@ -33,6 +33,36 @@ def test_notification_is_frozen() -> None:
         notification.subject = "Changed"  # type: ignore[misc]
 
 
+def test_notification_metadata_is_frozen_too() -> None:
+    """`frozen=True` covers the attribute; `__post_init__` covers what is in it.
+
+    Without the copy, the metadata a strategy reads at delivery time is
+    whatever the caller's dict says *then* — and delivery is asynchronous, so
+    "then" is not when the notification was built.
+    """
+    source = {"trace": "original"}
+    notification = Notification(subject="Hi", body="There", metadata=source)
+
+    source["trace"] = "tampered"
+
+    assert notification.metadata == {"trace": "original"}
+    with pytest.raises(TypeError):
+        notification.metadata["trace"] = "tampered"  # type: ignore[index]
+
+
+def test_notification_is_hashable() -> None:
+    """Which it is not while `metadata` is a plain dict.
+
+    An unhashable value object cannot be a set member or an argument to a
+    `@cached` function — `src/decorators/cache.py` rejects one by design.
+    """
+    first = Notification(subject="Hi", body="There", metadata={"k": "v"})
+    second = Notification(subject="Hi", body="There", metadata={"k": "v"})
+
+    assert hash(first) == hash(second)
+    assert len({first, second}) == 1
+
+
 @pytest.mark.parametrize(
     ("subject", "body"),
     [("", "body"), ("   ", "body"), ("subject", ""), ("subject", "  \n ")],

@@ -35,7 +35,7 @@ class UserProfileResponse(BaseModel):
     notification_channel: str
     notification_webhook_url: str | None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -53,7 +53,7 @@ class ProfileUpdateRequest(BaseModel):
     200 and changing nothing — is the worst answer available.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     notification_channel: str | None = None
     notification_webhook_url: str | None = None

@@ -24,6 +24,7 @@ from typing import Any, Final, NoReturn
 import httpx
 import structlog
 
+from src.immutable import FrozenDict
 from src.payments.base import (
     ChargeRequest,
     Money,
@@ -44,23 +45,27 @@ DEFAULT_API_BASE_URL: Final[str] = "https://api.stripe.com"
 # Stripe's PaymentIntent statuses, mapped onto the three this application
 # understands. `requires_action` is the 3-D Secure case: not a failure, not
 # money in the bank, and the single most common reason to get this wrong.
-_INTENT_STATUS: Final[dict[str, PaymentStatus]] = {
-    "succeeded": "succeeded",
-    "processing": "pending",
-    "requires_action": "pending",
-    "requires_confirmation": "pending",
-    "requires_payment_method": "failed",
-    "requires_capture": "pending",
-    "canceled": "failed",
-}
+_INTENT_STATUS: Final[FrozenDict[str, PaymentStatus]] = FrozenDict[str, PaymentStatus](
+    {
+        "succeeded": "succeeded",
+        "processing": "pending",
+        "requires_action": "pending",
+        "requires_confirmation": "pending",
+        "requires_payment_method": "failed",
+        "requires_capture": "pending",
+        "canceled": "failed",
+    }
+)
 
-_REFUND_STATUS: Final[dict[str, RefundStatus]] = {
-    "succeeded": "succeeded",
-    "pending": "pending",
-    "requires_action": "pending",
-    "failed": "failed",
-    "canceled": "failed",
-}
+_REFUND_STATUS: Final[FrozenDict[str, RefundStatus]] = FrozenDict[str, RefundStatus](
+    {
+        "succeeded": "succeeded",
+        "pending": "pending",
+        "requires_action": "pending",
+        "failed": "failed",
+        "canceled": "failed",
+    }
+)
 
 
 class StripeGateway:

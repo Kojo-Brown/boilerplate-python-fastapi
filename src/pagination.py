@@ -1,19 +1,31 @@
 import base64
 from collections.abc import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CursorPage[T](BaseModel):
-    """Generic cursor-paginated response envelope."""
+    """Generic cursor-paginated response envelope.
 
-    items: list[T]
+    `items` is a tuple rather than a list, which is the difference between a
+    frozen model and an immutable one: `frozen=True` refuses `page.items = []`
+    and has nothing to say about `page.items.append(...)`. A page is a
+    *snapshot* — `next_cursor` was computed from its last element — so an
+    appended item leaves the envelope describing a page it no longer contains.
+    JSON has one array type, so the serialised body is unchanged.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    items: tuple[T, ...]
     next_cursor: str | None = None
     has_more: bool = False
 
 
 class CursorParams(BaseModel):
     """Query parameters for cursor-based pagination."""
+
+    model_config = ConfigDict(frozen=True)
 
     limit: int = Field(default=20, ge=1, le=100)
     cursor: str | None = None
@@ -42,7 +54,7 @@ def build_page[T](
     it back as ``cursor`` on the next request.
     """
     has_more = len(items) > limit
-    page_items = items[:limit] if has_more else items
+    page_items = tuple(items[:limit] if has_more else items)
     next_cursor: str | None = (
         encode_cursor(get_cursor(page_items[-1])) if has_more and page_items else None
     )

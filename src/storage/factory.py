@@ -14,6 +14,7 @@ from typing import ClassVar, Final, Literal
 import structlog
 
 from src.config import Settings, settings
+from src.immutable import FrozenDict
 from src.storage.base import StorageBackend, UnknownStorageBackendError
 from src.storage.local import LocalStorage
 from src.storage.memory import MemoryStorage
@@ -25,11 +26,15 @@ StorageBackendName = Literal["s3", "local", "memory"]
 
 BackendBuilder = Callable[[Settings], StorageBackend]
 
-DEFAULT_BACKENDS: Final[dict[str, BackendBuilder]] = {
-    "s3": lambda config: S3Storage(config.AWS_S3_BUCKET),
-    "local": lambda config: LocalStorage(config.STORAGE_LOCAL_ROOT),
-    "memory": lambda _: MemoryStorage(),
-}
+DEFAULT_BACKENDS: Final[FrozenDict[str, BackendBuilder]] = FrozenDict[
+    str, BackendBuilder
+](
+    {
+        "s3": lambda config: S3Storage(config.AWS_S3_BUCKET),
+        "local": lambda config: LocalStorage(config.STORAGE_LOCAL_ROOT),
+        "memory": lambda _: MemoryStorage(),
+    }
+)
 
 
 class StorageFactory:

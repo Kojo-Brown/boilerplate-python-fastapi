@@ -15,6 +15,7 @@ from typing import ClassVar, Final, Literal
 import structlog
 
 from src.config import Settings, settings
+from src.immutable import FrozenDict
 from src.payments.base import (
     PaymentConfigurationError,
     PaymentGateway,
@@ -58,10 +59,12 @@ def _build_paypal(config: Settings) -> PaymentGateway:
     )
 
 
-DEFAULT_GATEWAYS: Final[dict[str, GatewayBuilder]] = {
-    "stripe": _build_stripe,
-    "paypal": _build_paypal,
-}
+DEFAULT_GATEWAYS: Final[FrozenDict[str, GatewayBuilder]] = FrozenDict(
+    {
+        "stripe": _build_stripe,
+        "paypal": _build_paypal,
+    }
+)
 
 
 class PaymentGatewayRegistry:

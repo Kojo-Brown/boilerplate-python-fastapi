@@ -154,7 +154,18 @@ class TestChargeRequest:
                 description="x" * (MAX_DESCRIPTION_LENGTH + 1),
             )
 
-    def test_metadata_defaults_to_empty_and_is_not_shared(self) -> None:
+    def test_metadata_defaults_to_empty_and_cannot_be_shared_between_charges(
+        self,
+    ) -> None:
+        """The default is one shared object, and that is now safe.
+
+        This used to assert `first.metadata is not second.metadata`, because
+        the default was `field(default_factory=dict)` and a shared mutable
+        default is the classic way one charge's metadata turns up on another's.
+        The default is now a `FrozenDict`, so the two *are* the same object and
+        the leak it guarded against is unrepresentable rather than merely
+        absent — which is what this asserts instead.
+        """
         first = ChargeRequest(
             amount=Money(amount_minor=100, currency="USD"),
             payment_method_token="mock-token",
@@ -166,7 +177,52 @@ class TestChargeRequest:
             reference="order-2",
         )
         assert first.metadata == {} and second.metadata == {}
-        assert first.metadata is not second.metadata
+
+        with pytest.raises(TypeError):
+            first.metadata["leaked"] = "yes"  # type: ignore[index]
+        assert second.metadata == {}
+
+    def test_metadata_is_copied_away_from_the_caller(self) -> None:
+        """A charge is not aliased to the dict it was built from.
+
+        `frozen=True` alone leaves the caller's mapping in place, so a
+        `metadata` edited after construction would reach both adapters — both
+        send it upstream — and the provider's record of the charge would
+        disagree with the request that was validated.
+        """
+        source = {"order": "1"}
+        request = ChargeRequest(
+            amount=Money(amount_minor=100, currency="USD"),
+            payment_method_token="mock-token",
+            reference="order-1",
+            metadata=source,
+        )
+
+        source["order"] = "2"
+
+        assert request.metadata == {"order": "1"}
+
+    def test_a_charge_request_is_hashable(self) -> None:
+        """Which it is not while `metadata` is a plain dict.
+
+        A value object that cannot be hashed cannot be a set member, a dict
+        key, or an argument to a `@cached` function — `src/decorators/cache.py`
+        raises `UnhashableArgumentError` for exactly this.
+        """
+        request = ChargeRequest(
+            amount=Money(amount_minor=100, currency="USD"),
+            payment_method_token="mock-token",
+            reference="order-1",
+            metadata={"order": "1"},
+        )
+        assert hash(request) == hash(
+            ChargeRequest(
+                amount=Money(amount_minor=100, currency="USD"),
+                payment_method_token="mock-token",
+                reference="order-1",
+                metadata={"order": "1"},
+            )
+        )
 
 
 class TestPayment:

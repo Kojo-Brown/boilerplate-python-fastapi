@@ -17,6 +17,7 @@ from src.config import Settings, settings
 from src.idempotency.base import IdempotencyStore
 from src.idempotency.memory import InMemoryIdempotencyStore
 from src.idempotency.redis_store import RedisIdempotencyStore
+from src.immutable import FrozenDict
 
 logger = structlog.get_logger(__name__)
 
@@ -40,10 +41,12 @@ def _build_memory(config: Settings) -> IdempotencyStore:
     )
 
 
-BUILDERS: Final[dict[str, StoreBuilder]] = {
-    "redis": _build_redis,
-    "memory": _build_memory,
-}
+BUILDERS: Final[FrozenDict[str, StoreBuilder]] = FrozenDict[str, StoreBuilder](
+    {
+        "redis": _build_redis,
+        "memory": _build_memory,
+    }
+)
 
 
 def create_idempotency_store(

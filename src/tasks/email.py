@@ -16,20 +16,39 @@ Usage in a router:
 """
 
 import asyncio
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 import structlog
+
+from src.immutable import EMPTY_MAPPING, freeze_mapping
 
 logger = structlog.get_logger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class EmailMessage:
+    """One email, as a value object.
+
+    Frozen because `send_email_with_retry` may deliver this object up to three
+    times: a message edited between attempts means attempt two sends something
+    the caller never asked for, and the log line naming the failure refers to a
+    subject that no longer exists. Retry is only safe over an argument that
+    cannot change under it.
+    """
+
     to: str
     subject: str
     body: str
     html_body: str | None = None
-    headers: dict[str, str] = field(default_factory=dict)
+    #: Frozen on construction — see `__post_init__`.
+    headers: Mapping[str, str] = EMPTY_MAPPING
+
+    def __post_init__(self) -> None:
+        # `frozen=True` refuses `message.headers = {...}` and permits
+        # `message.headers["Bcc"] = ...`, which is the mutation that matters
+        # for a mail header.
+        object.__setattr__(self, "headers", freeze_mapping(self.headers))
 
 
 async def _deliver_email(message: EmailMessage) -> None:
