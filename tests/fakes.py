@@ -179,6 +179,23 @@ class RecordingUnitOfWork:
         self.calls.append("commit")
 
 
+class RecordingSink:
+    """A `RowSink` that keeps what was staged instead of staging it.
+
+    Enough to answer "what would this transaction have written, and in what
+    order?" without a database. It is deliberately not a session: it does not
+    flush, does not assign defaults and cannot roll back, so a test that needs
+    any of those is asking an integration question and belongs against the real
+    Postgres in `tests/test_outbox_db.py`.
+    """
+
+    def __init__(self) -> None:
+        self.added: list[object] = []
+
+    def add(self, instance: object) -> None:
+        self.added.append(instance)
+
+
 class CollectingPublisher:
     """An `EventPublisher` that keeps what it was given.
 
@@ -199,6 +216,7 @@ if TYPE_CHECKING:
     # Static conformance. Nothing calls this; mypy checking it is the whole
     # point, and it fails the build if a fake drifts from its protocol.
     from src.events.base import EventPublisher
+    from src.outbox.base import RowSink
     from src.repositories.protocols import RefreshTokenStore, UserStore
     from src.unit_of_work import UnitOfWork
 
@@ -207,3 +225,4 @@ if TYPE_CHECKING:
         _tokens: RefreshTokenStore = InMemoryRefreshTokenStore()
         _uow: UnitOfWork = RecordingUnitOfWork()
         _events: EventPublisher = CollectingPublisher()
+        _sink: RowSink = RecordingSink()

@@ -32,13 +32,14 @@ encoding is one subscriber that calls both.
 event. That is what makes an audit log or a metrics tap a subscriber like any
 other rather than a special case wired into `publish`.
 
-**This bus is in-process and forgets.** Nothing is persisted; a crash between
-the commit and the subscribers loses the notification. The durable version is
-the transactional outbox — an event row written in the same transaction as the
-state change, relayed afterwards — which is a separate item and a separate set
-of tradeoffs. Publishing *after* commit (see `AuthService`) at least keeps the
-opposite failure, subscribers reacting to a transaction that then rolls back,
-from happening at all.
+**This bus is in-process and forgets, so nothing publishes to it directly.**
+Nothing here is persisted, and a crash between a commit and the subscribers
+would lose the notification. The request path therefore publishes to the
+transactional outbox (`src/outbox`), which writes an event row in the same
+transaction as the state change; the relay reads committed rows and dispatches
+them *here*. Everything above still describes what happens once an event
+reaches the bus — the difference is who hands it over, and that the handover
+survives the process dying.
 """
 
 from __future__ import annotations

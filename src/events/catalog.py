@@ -15,7 +15,7 @@ session, and accept that the row may have moved on since.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Final
 
 from src.events.base import DomainEvent
 
@@ -63,3 +63,20 @@ class UserLoggedIn(UserEvent):
     #: for the same reason `users.notification_channel` is: adding a method
     #: should not become a migration.
     method: str = "password"
+
+
+#: The event types that can be read back out of the transactional outbox.
+#
+# An outbox row stores `event_name` and its fields; turning that back into an
+# event needs a name-to-class map, and this is it. Concrete types only —
+# `UserEvent` is a base nobody publishes, and registering it would offer the
+# relay a class it can never be asked for.
+#
+# Adding an event means adding it here. Forgetting is not a subtle bug for
+# long: `tests/test_outbox_codec.py` walks this module and fails on any
+# publishable event that is missing, because the alternative is discovering it
+# as rows accumulating in production behind an "unknown event type" error.
+EVENT_TYPES: Final[tuple[type[DomainEvent], ...]] = (
+    UserRegistered,
+    UserLoggedIn,
+)

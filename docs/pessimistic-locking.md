@@ -234,9 +234,10 @@ together, so retrying in lockstep re-creates the same deadlock on the same rows.
 count, or a queue — the rows this API writes are single-owner profile rows, and
 `/api/v1/users/me` is correctly served by optimistic concurrency. Wiring a lock
 into a route that does not need one would be a worked example pretending to be a
-requirement. The library is complete and tested; the first genuine consumer will
-be the transactional outbox relay later in Phase 7, which claims rows with
-exactly the `FOR UPDATE SKIP LOCKED` batch pattern above.
+requirement. The library is complete and tested, and its first genuine consumer
+is the transactional outbox relay (`src/outbox/store.py`, `docs/outbox.md`),
+which claims rows with exactly the `FOR UPDATE SKIP LOCKED` batch pattern
+above — `lock_rows` itself, not a second copy of it.
 
 **No advisory locks.** `pg_advisory_xact_lock` is the right tool for mutual
 exclusion over something that is not a row — a nightly job, a per-tenant

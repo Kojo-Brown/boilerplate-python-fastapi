@@ -221,6 +221,10 @@ concurrent execution the lock was taken to prevent, so an unreachable store is
   outer section would run on believing otherwise.
 * **No route consumes it yet.** Nothing in this schema has a job queue or an
   external resource that needs cross-process exclusion, and a lock on a route
-  that does not need one is a worked example pretending to be a requirement. The
-  transactional outbox later in Phase 7 is the first plausible consumer.
-  `LockBackendDep` in `src/dependencies.py` is wired and waiting.
+  that does not need one is a worked example pretending to be a requirement.
+  `LockBackendDep` in `src/dependencies.py` is wired and waiting. The
+  transactional outbox looked like the first consumer and turned out not to be:
+  its relay claims rows with `FOR UPDATE SKIP LOCKED`, which lets any number of
+  relays run concurrently, where a distributed lock would have made the relay a
+  singleton to solve a problem the row locks already solve. See
+  `docs/outbox.md`.

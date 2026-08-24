@@ -35,14 +35,18 @@ removes only the database, which is what most of the auth tests want. See
 
 ## One session per request
 
-`get_user_store`, `get_refresh_token_store` and `get_unit_of_work` each declare
-`Depends(get_db)`, and all three receive the *same* session: FastAPI caches a
-dependency's result for the duration of a request, keyed on the callable. That
-caching is load-bearing rather than an optimisation — three separate sessions
-would mean the unit of work committing a transaction that the repositories never
-wrote to, so a registration would return 201 and persist nothing. Any provider
-added here that touches the database must take it through `get_db` for the same
-reason.
+`get_user_store`, `get_refresh_token_store`, `get_unit_of_work` and
+`get_event_publisher` each declare `Depends(get_db)`, and all four receive the
+*same* session: FastAPI caches a dependency's result for the duration of a
+request, keyed on the callable. That caching is load-bearing rather than an
+optimisation — separate sessions would mean the unit of work committing a
+transaction that the repositories never wrote to, so a registration would return
+201 and persist nothing. The publisher joined that list when events became
+outbox rows, and for it the stake is the same one in a different place: a row
+written through a second session is a notification that commits separately from
+the change it describes, which is the entire failure the outbox exists to
+remove. Any provider added here that touches the database must take it through
+`get_db` for the same reason.
 """
 
 from __future__ import annotations
@@ -59,8 +63,8 @@ from src.database import get_db
 from src.distributed_lock.base import LockBackend
 from src.distributed_lock.factory import get_lock_backend
 from src.events.base import EventPublisher
-from src.events.bus import event_bus
 from src.models.user import User
+from src.outbox.publisher import OutboxPublisher
 from src.parallel.cpu import CpuPool
 from src.parallel.factory import get_cpu_pool
 from src.payments.base import PaymentGateway
@@ -96,16 +100,26 @@ def get_unit_of_work(db: DbSession) -> UnitOfWork:
     return db
 
 
-def get_event_publisher() -> EventPublisher:
-    """The process-wide bus.
+def get_event_publisher(db: DbSession) -> EventPublisher:
+    """Publishing writes a row in *this request's* transaction.
 
-    Not cached per request and not built here: subscribers are registered once
-    from the lifespan, and a bus constructed per request would have none of
-    them. Tests that want to assert on published events override this with
-    their own `EventBus` rather than registering against the global one and
-    racing every other test.
+    The session is the reason this provider takes a dependency at all. An
+    outbox row is only worth anything if it commits with the state change that
+    caused it, so the publisher has to write through the same session the
+    repositories do — which it does for the same reason they share one, namely
+    that FastAPI caches `Depends(get_db)` per request.
+
+    The process-wide `EventBus` is no longer what a route publishes to. It is
+    what the *relay* dispatches to once a row has committed, which is what
+    keeps a subscriber from ever reacting to a transaction that rolled back
+    while also keeping the reaction from being lost if this process dies. See
+    `docs/outbox.md`.
+
+    Tests that want to assert on published events override this with
+    `CollectingPublisher`, or with a real `OutboxPublisher` over a sink of
+    their own.
     """
-    return event_bus
+    return OutboxPublisher(db)
 
 
 def get_if_match(
