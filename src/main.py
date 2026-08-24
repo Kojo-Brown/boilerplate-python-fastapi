@@ -25,6 +25,7 @@ from src.limiter import limiter
 from src.logging_config import configure_logging
 from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
 from src.middleware.request_id import RequestIDMiddleware
+from src.outbox.factory import get_outbox_relay
 from src.parallel.factory import get_cpu_pool
 
 
@@ -38,9 +39,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # the first offload, so a deployment that never uses it pays nothing and the
     # first health check is not queued behind several interpreter start-ups.
     get_cpu_pool().start()
+    # The relay drains committed outbox rows into the bus above, so it starts
+    # after the subscribers are registered — a batch delivered to an empty bus
+    # would count as delivered and be deleted. Off in a deployment that runs
+    # its relays as separate processes; see src/config.py.
+    if settings.OUTBOX_RELAY_ENABLED:
+        get_outbox_relay().start()
     yield
-    # Nothing is in flight by the time this runs — publish awaits its
-    # subscribers — so dropping the registrations is all shutdown needs.
+    # First, and before the bus is cleared: the relay is the only thing still
+    # publishing by now, and an event dispatched to a bus with no subscribers
+    # is a *successful* delivery whose row is then deleted. Stopping it here
+    # also lets its in-flight batch roll back, which releases the row locks and
+    # leaves those events for the next process to claim.
+    if settings.OUTBOX_RELAY_ENABLED:
+        await get_outbox_relay().stop()
     event_bus.clear()
     # The idempotency store owns a connection pool. Closing it here rather than
     # leaving it to garbage collection keeps a reload from leaking sockets.

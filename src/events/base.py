@@ -96,8 +96,9 @@ class DomainEvent:
     `event_id` and `occurred_at` are defaulted rather than assigned by the bus
     so that an event is complete the moment it is constructed — it can be
     logged, compared or persisted before anything publishes it, which is what
-    the transactional outbox will need. Both are overridable by keyword, which
-    is how a test pins them.
+    the transactional outbox needs: `src/outbox` writes both into columns of
+    their own and reconstructs the event from them. Both are overridable by
+    keyword, which is how a test pins them.
 
     Frozen because a subscriber runs concurrently with its siblings: a mutable
     event would let the first handler to run rewrite what the others observe,
@@ -134,10 +135,13 @@ class EventPublisher(Protocol):
 
     The return is `object` rather than `PublishResult` on purpose. `publish`
     reports which subscribers failed, and a caller that means to act on that
-    should say so by depending on the bus itself; every caller here deliberately
-    ignores it, because a broken mail queue must not fail a registration that
-    has already committed. Promising a `PublishResult` here would oblige every
-    fake publisher to construct one for a value nothing reads.
+    should say so by depending on something that promises one — which is
+    exactly what `src.outbox.base.EventDispatcher` does, because the relay has
+    to know whether an event was delivered before it deletes the row. Every
+    caller of *this* protocol deliberately ignores the report: they are
+    producers, and `OutboxPublisher` has nothing to report, since it has not
+    dispatched anything yet. Promising a `PublishResult` here would oblige every
+    one of them to construct one for a value nothing reads.
     """
 
     async def publish(self, event: DomainEvent) -> object:

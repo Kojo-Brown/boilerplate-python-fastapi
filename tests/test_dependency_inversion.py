@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth.service import AuthService
 from src.database import get_db
 from src.dependencies import (
+    EventPublisherDep,
     RefreshTokenStoreDep,
     UnitOfWorkDep,
     UserStoreDep,
@@ -32,9 +33,11 @@ from src.dependencies import (
     get_user_store,
 )
 from src.events.base import EventPublisher
-from src.events.bus import event_bus
+from src.events.catalog import UserRegistered
 from src.limiter import limiter
 from src.main import app
+from src.models.outbox import OutboxEvent
+from src.outbox.publisher import OutboxPublisher
 from src.repositories.protocols import RefreshTokenStore, UserStore
 from src.repositories.refresh_token import RefreshTokenRepository
 from src.repositories.user import UserRepository
@@ -43,6 +46,7 @@ from tests.fakes import (
     CollectingPublisher,
     InMemoryRefreshTokenStore,
     InMemoryUserStore,
+    RecordingSink,
     RecordingUnitOfWork,
 )
 
@@ -88,11 +92,22 @@ def test_a_session_is_already_a_unit_of_work() -> None:
     assert isinstance(AsyncMock(spec=AsyncSession), UnitOfWork)
 
 
-def test_the_event_publisher_is_the_process_wide_bus() -> None:
-    """Subscribers are registered once from the lifespan. A bus built per
-    request would have none of them, and nothing would notice until a welcome
-    email stopped being sent."""
-    assert get_event_publisher() is event_bus
+async def test_the_event_publisher_writes_into_this_requests_transaction() -> None:
+    """Publishing is an outbox row now, not an in-process dispatch.
+
+    The process-wide bus is still where events end up, but the relay is what
+    puts them there, once the row has committed. What the request path gets is
+    a publisher bound to its own session — anything else and the notification
+    would commit separately from the change it describes.
+    """
+    session = RecordingSink()
+    publisher = get_event_publisher(session)  # type: ignore[arg-type]
+
+    assert isinstance(publisher, OutboxPublisher)
+
+    await publisher.publish(UserRegistered(user_id="u", email="e@example.com"))
+    (row,) = session.added
+    assert isinstance(row, OutboxEvent)
 
 
 # --- wiring --------------------------------------------------------------
@@ -122,6 +137,7 @@ async def test_one_request_gets_one_session() -> None:
         users: UserStoreDep,
         tokens: RefreshTokenStoreDep,
         uow: UnitOfWorkDep,
+        events: EventPublisherDep,
     ) -> dict[str, bool]:
         # Reaching for `.session` is reaching past the protocol on purpose: the
         # question is which concrete object the wiring handed over, and only the
@@ -129,6 +145,10 @@ async def test_one_request_gets_one_session() -> None:
         seen["users"] = users.session  # type: ignore[attr-defined]
         seen["tokens"] = tokens.session  # type: ignore[attr-defined]
         seen["uow"] = uow
+        # The publisher is in this list because an outbox row written through a
+        # second session is a notification that commits separately from the
+        # change it announces — which is the entire failure the outbox removes.
+        seen["events"] = events.sink  # type: ignore[attr-defined]
         return {"ok": True}
 
     async with AsyncClient(
@@ -138,6 +158,7 @@ async def test_one_request_gets_one_session() -> None:
 
     assert seen["users"] is session
     assert seen["tokens"] is session
+    assert seen["events"] is session
     assert seen["uow"] is session
 
 

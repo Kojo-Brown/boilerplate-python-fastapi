@@ -31,11 +31,24 @@ class AuthService:
 
     What happens *because* an account was created or entered is not decided
     here. This class publishes domain events and returns; `src/events` routes
-    them to whatever is subscribed. Every publish is deliberately placed after
-    the commit — a subscriber that reacted to a registration the database then
-    rolled back would be reacting to a user who does not exist, and a
-    subscriber's own failure never travels back to the caller, so a broken
-    mail queue cannot fail a registration that already succeeded.
+    them to whatever is subscribed.
+
+    Every publish is deliberately placed **inside the transaction, before the
+    commit**, which is the opposite of where it used to be and for the same
+    reason. Publishing means writing an outbox row (`src/outbox`), so the
+    notification and the state change now commit together or not at all: a
+    subscriber still cannot react to a registration that rolled back, because
+    the relay only ever reads committed rows, and the reaction can no longer be
+    lost by a process that dies after the commit — which is exactly what
+    publishing *after* the commit risked. The ordering is not cosmetic: a
+    publish placed after `commit()` would put its row in a fresh transaction
+    that `get_db` closes without committing, and the event would disappear with
+    no error raised anywhere.
+
+    A subscriber's failure still never travels back to the caller. It cannot:
+    subscribers now run in the relay, minutes or milliseconds later, so a
+    broken mail queue delays a welcome email and does nothing whatever to the
+    registration.
 
     Nothing it depends on is named concretely. The four collaborators are
     protocols — two stores, a transaction, a publisher — so substituting the
@@ -67,15 +80,15 @@ class AuthService:
             email=data.email,
             hashed_password=hash_password(data.password),
         )
-        # get_db() never commits on exit, so an uncommitted registration is
-        # rolled back when the session closes.
-        await self.uow.commit()
-
-        response = UserResponse.model_validate(user)
         await self.events.publish(
             UserRegistered(user_id=str(user.id), email=user.email, via="password")
         )
-        return response
+        # get_db() never commits on exit, so an uncommitted registration is
+        # rolled back when the session closes — and so is the outbox row above,
+        # which is the point of it being above.
+        await self.uow.commit()
+
+        return UserResponse.model_validate(user)
 
     async def login(self, email: str, password: str) -> TokenResponse:
         user = await self.users.get_by_email(email)
@@ -91,10 +104,10 @@ class AuthService:
             raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
-        await self.uow.commit()
         await self.events.publish(
             UserLoggedIn(user_id=str(user.id), email=user.email, method="password")
         )
+        await self.uow.commit()
         return tokens
 
     async def refresh(self, refresh_token: str) -> TokenResponse:
@@ -157,7 +170,6 @@ class AuthService:
             raise ForbiddenError("Account is inactive")
 
         tokens = await self._issue_tokens(user)
-        await self.uow.commit()
 
         user_id, user_email = str(user.id), user.email
         # A first OAuth sign-in is a registration as well as a login, and
@@ -165,6 +177,10 @@ class AuthService:
         # both, an address-confirmation mail to neither, since the provider
         # already verified it. Linking a provider to an existing account is
         # neither — that account was registered long ago.
+        #
+        # Both rows join the transaction that created the account, so a
+        # sign-in either produces the account and both notifications or
+        # produces none of them.
         if created:
             await self.events.publish(
                 UserRegistered(user_id=user_id, email=user_email, via="oauth")
@@ -172,6 +188,7 @@ class AuthService:
         await self.events.publish(
             UserLoggedIn(user_id=user_id, email=user_email, method="oauth")
         )
+        await self.uow.commit()
         return tokens
 
     async def logout(self, refresh_token: str) -> None:

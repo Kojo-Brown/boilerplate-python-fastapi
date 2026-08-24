@@ -128,13 +128,17 @@ event that closed the ring. `EventBus(max_depth=...)` changes the cap.
 
 ## What this bus is not
 
-It is in-process and it forgets. Nothing is persisted, so a crash between the
-commit and the subscribers loses the reaction, and a second application
-instance never sees the event at all. The durable answer is the transactional
-outbox — write an event row in the same transaction as the state change, relay
-it afterwards — which is a separate item with a separate set of tradeoffs.
-Until then: anything that must not be lost should be enqueued to Celery by its
-subscriber, where the broker owns the durability.
+It is in-process and it forgets. Nothing here is persisted, so a bus used on
+its own loses a reaction to any crash between the commit and the subscribers.
+
+That is why nothing publishes to it directly any more. The request path
+publishes to the **transactional outbox** (`docs/outbox.md`): an event row
+written in the same transaction as the state change, relayed to this bus
+afterwards. Everything below still describes what happens once an event reaches
+the bus — it is simply the relay that hands it over, and not the request, which
+is what makes the delivery durable and at-least-once. Anything that must not be
+lost *after* a subscriber has it should still be enqueued to Celery from inside
+that subscriber, where the broker owns the durability.
 
 ## Testing
 

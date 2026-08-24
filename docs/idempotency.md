@@ -191,5 +191,7 @@ returns, so a handler that commits and then crashes before the middleware
 stores anything will re-execute on retry. Making the effect itself idempotent —
 a unique constraint on a client-supplied reference, an upsert — is what closes
 that gap, and this middleware is what makes the retry that hits it cheap and
-observable. The transactional outbox later in Phase 7 is the durable half of
-the same story.
+observable. The transactional outbox (`docs/outbox.md`) is the durable half of
+the same story: it cannot stop a handler re-executing, but it does guarantee
+that whatever the handler committed is announced exactly as often as it
+committed.

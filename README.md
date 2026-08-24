@@ -82,8 +82,15 @@ of what they wrap, and the order to stack them in.
 ## Domain events
 [docs/events.md](./docs/events.md) — the async event bus in `src/events`, how a
 subscriber is type-checked against the event it observes, why publishing waits
-for its subscribers and happens after the commit, and what happens when one of
-them fails.
+for its subscribers, and what happens when one of them fails.
+
+## Transactional outbox
+[docs/outbox.md](./docs/outbox.md) — why publishing either before or after the
+commit loses something, the event row written in the same transaction as the
+state change, the relay that claims committed rows with
+`FOR UPDATE SKIP LOCKED` and dispatches them, why payloads are JSON scalars
+only and refused at publish time, and what at-least-once delivery asks of a
+subscriber.
 
 ## Payments
 [docs/payments.md](./docs/payments.md) — the `PaymentGateway` protocol, the

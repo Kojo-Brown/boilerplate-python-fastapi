@@ -118,6 +118,29 @@ class Settings(BaseSettings):
     # to be process-wide. See src/parallel/factory.py.
     OUTBOUND_CONCURRENCY_LIMIT: int = 20
 
+    # Transactional outbox (see src/outbox/ and docs/outbox.md). There is no
+    # switch for *writing* outbox rows: the publisher is wired in
+    # src/dependencies.py, and a flag that quietly sent events back through the
+    # in-process bus would reintroduce the lost-event window the outbox exists
+    # to close, in the deployment least expecting it.
+    #
+    # RELAY_ENABLED is a different question — whether *this* process drains the
+    # table. Turn it off in the API pods and run one or more dedicated relay
+    # processes when you want delivery isolated from request traffic; the row
+    # locks make any number of relays safe. Turning it off everywhere means
+    # nothing is delivered, which the health of the table makes obvious.
+    #
+    # BATCH_SIZE and DISPATCH_TIMEOUT multiply into the worst-case time one
+    # transaction holds a pooled connection and a set of row locks. POLL
+    # INTERVAL is the tail latency of every notification when the queue is
+    # empty, and one query per interval per relay when it stays empty.
+    OUTBOX_RELAY_ENABLED: bool = True
+    OUTBOX_BATCH_SIZE: int = 100
+    OUTBOX_POLL_INTERVAL_SECONDS: float = 1.0
+    OUTBOX_DISPATCH_TIMEOUT_SECONDS: float = 30.0
+    OUTBOX_RETRY_BASE_DELAY_SECONDS: float = 1.0
+    OUTBOX_RETRY_MAX_DELAY_SECONDS: float = 300.0
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

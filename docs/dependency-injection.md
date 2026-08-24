@@ -64,20 +64,26 @@ fails here rather than at a call site three modules away.
 Two rules for anything added to `src/dependencies.py`:
 
 **Take the session through `get_db`.** `get_user_store`,
-`get_refresh_token_store` and `get_unit_of_work` all declare `Depends(get_db)`
-and all three receive the *same* session, because FastAPI caches a dependency's
-result per request, keyed on the callable. That is not an optimisation — three
-separate sessions would mean the unit of work committing a transaction the
-repositories never wrote to, and a registration answering `201` while persisting
-nothing. `test_one_request_gets_one_session` pins it.
+`get_refresh_token_store`, `get_unit_of_work` and `get_event_publisher` all
+declare `Depends(get_db)` and all four receive the *same* session, because
+FastAPI caches a dependency's result per request, keyed on the callable. That is
+not an optimisation — separate sessions would mean the unit of work committing a
+transaction the repositories never wrote to, and a registration answering `201`
+while persisting nothing. For the publisher the stake is the same one in a
+different place: publishing writes an outbox row, and a row written through a
+second session is a notification that commits separately from the change it
+describes (`docs/outbox.md`). `test_one_request_gets_one_session` pins all four.
 
 **Cache what owns a connection pool, per process, not per request.**
 `get_storage` and `get_payment_gateway` are `lru_cache`d beside their factories:
 both adapters hold an `httpx.AsyncClient`, and rebuilding one per request throws
 away the pool that made it worth having — and, for PayPal, the cached OAuth
-token with it, spending an extra round trip on every payment. `get_event_publisher`
-returns the process-wide bus for a different reason: subscribers are registered
-once from the lifespan, so a bus built per request would have none of them.
+token with it, spending an extra round trip on every payment. The process-wide
+`EventBus` is cached for a different reason again — subscribers are registered
+once from the lifespan, so a bus built per request would have none of them — but
+it is no longer what `get_event_publisher` returns: the relay dispatches to it
+once a row has committed, and the request path gets a publisher bound to its own
+session.
 
 ## Overriding in tests
 

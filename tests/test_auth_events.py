@@ -106,25 +106,72 @@ async def test_register_publishes_user_registered(
     assert event.via == "password"
 
 
-async def test_register_publishes_after_the_commit(bus: EventBus) -> None:
-    """A subscriber that fired before the commit could react to a
-    registration the database then rolled back."""
-    order: list[str] = []
+def ordering_uow(order: list[str]) -> RecordingUnitOfWork:
+    """A unit of work that records where its commit fell in the sequence."""
 
     class OrderingUnitOfWork(RecordingUnitOfWork):
         async def commit(self) -> None:
             await super().commit()
             order.append("commit")
 
+    return OrderingUnitOfWork()
+
+
+def ordering_bus(bus: EventBus, order: list[str]) -> EventBus:
     async def record(event: DomainEvent) -> None:
         order.append("publish")
 
     bus.subscribe(DomainEvent, record)
-    await service_over(bus, uow=OrderingUnitOfWork()).register(
+    return bus
+
+
+async def test_register_publishes_inside_the_transaction(bus: EventBus) -> None:
+    """Publishing writes an outbox row, so it has to happen before the commit.
+
+    This assertion is the reverse of the one it replaces, and the reversal is
+    the point of the outbox. When publishing meant dispatching in-process, the
+    call sat after the commit so that nothing could react to a transaction that
+    then rolled back — at the cost of losing the reaction entirely if the
+    process died in the gap. Now the row commits *with* the registration, so
+    neither failure is available: the relay only ever reads committed rows.
+
+    Getting this backwards does not raise anything. A publish after the commit
+    stages its row in a fresh transaction that `get_db` closes without
+    committing, and the event silently disappears — which
+    `tests/test_outbox_db.py` demonstrates against a real database.
+    """
+    order: list[str] = []
+
+    await service_over(bus=ordering_bus(bus, order), uow=ordering_uow(order)).register(
         RegisterRequest(email="new@example.com", password=PASSWORD)
     )
 
-    assert order == ["commit", "publish"]
+    assert order == ["publish", "commit"]
+
+
+async def test_login_publishes_inside_the_transaction(bus: EventBus) -> None:
+    order: list[str] = []
+    user = make_user()
+
+    await service_over(
+        bus=ordering_bus(bus, order), users=[user], uow=ordering_uow(order)
+    ).login(user.email, PASSWORD)
+
+    assert order == ["publish", "commit"]
+
+
+async def test_a_first_oauth_sign_in_commits_both_events_with_the_account(
+    bus: EventBus,
+) -> None:
+    """Two rows and one INSERT in one transaction: a sign-in either produces
+    the account and both notifications, or produces none of them."""
+    order: list[str] = []
+
+    service = service_over(bus=ordering_bus(bus, order), uow=ordering_uow(order))
+
+    await service.oauth_login("google", "sub-123", "new@example.com")
+
+    assert order == ["publish", "publish", "commit"]
 
 
 async def test_a_rejected_registration_publishes_nothing(
