@@ -98,7 +98,12 @@ every non-public route here already requires.
 - **An exception from the handler.** The reservation is released before the
   exception propagates, including on `CancelledError` from a client that
   disconnected mid-flight. Otherwise the retry would meet a reservation nothing
-  will ever complete.
+  will ever complete. That release goes through `finalize` from
+  `src/structured` rather than a bare `await`: it is the one await in this
+  middleware that runs on a task somebody has *already* cancelled, so a second
+  cancellation — a shutdown draining its tasks, an enclosing `TaskGroup`
+  aborting — would otherwise cut it half-done and leave the reservation held
+  for its full TTL. See `docs/structured-concurrency.md`.
 - **`Set-Cookie`.** A session cookie is a credential minted for one caller;
   under the shared `anon` namespace a replay could hand it to another. Nothing
   here sets cookies on a keyed method — the OAuth routes that do are `GET`s.

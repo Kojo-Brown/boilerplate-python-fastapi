@@ -297,3 +297,8 @@ retried within its slot rather than failing the whole batch.
   module is concurrency *capacity*. A fan-out that mutates shared state needs
   both.
 - **`src/decorators/retry.py`** — composes inside a `gather_bounded` slot.
+- **`src/structured/`** — the same work seen from the other side. This module
+  answers "how many at once"; that one answers "for how long, who owns the
+  task, and what runs when the caller gives up". `gather_bounded` already
+  cancels and drains its siblings; what it cannot supply is a budget spanning
+  the whole handler, which is `deadline()`.

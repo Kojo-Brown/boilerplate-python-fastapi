@@ -23,6 +23,7 @@ import pytest
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import ASGITransport, AsyncClient
+from starlette.types import Message, Receive, Scope, Send
 
 from src.idempotency.base import (
     IDEMPOTENCY_KEY_HEADER,
@@ -662,6 +663,65 @@ class TestAsgiEdges:
 
         assert response.status_code == 503
         assert harness.calls["status-503"] == 1
+
+    async def test_the_reservation_is_released_despite_a_second_cancellation(
+        self,
+    ) -> None:
+        """The release runs on a task somebody has already cancelled.
+
+        A client disconnect cancels the handler and this middleware starts
+        releasing the reservation; a shutdown draining its tasks — or an
+        enclosing `TaskGroup` aborting — cancels it *again*, in the middle of
+        that release. Without `finalize` the reservation survives the request
+        and answers every retry with 409 until its TTL runs out, which is the
+        outcome the release exists to prevent.
+        """
+
+        class SlowRelease(InMemoryIdempotencyStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.completed: list[str] = []
+
+            async def release(self, key: str) -> None:
+                await asyncio.sleep(0.05)
+                await super().release(key)
+                self.completed.append(key)
+
+        store = SlowRelease()
+        entered = asyncio.Event()
+
+        async def app(scope: Scope, receive: Receive, send: Send) -> None:
+            entered.set()
+            await asyncio.sleep(30)
+
+        middleware = IdempotencyMiddleware(app, store=store)
+
+        async def receive() -> Message:
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        async def send(message: Message) -> None:  # pragma: no cover
+            raise AssertionError("no response is produced on this path")
+
+        scope: Scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/orders",
+            "query_string": b"",
+            "headers": [(b"idempotency-key", b"k-cancel")],
+        }
+        task = asyncio.ensure_future(middleware(scope, receive, send))
+        await entered.wait()
+
+        # Twice: one cancellation is caught by the middleware's own handler,
+        # and it takes a second to cut the release that handler started.
+        for _ in range(2):
+            task.cancel()
+            await asyncio.sleep(0.01)
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert len(store.completed) == 1
 
     async def test_a_non_http_scope_is_passed_through(self) -> None:
         """Lifespan and websocket scopes have no headers to inspect."""
