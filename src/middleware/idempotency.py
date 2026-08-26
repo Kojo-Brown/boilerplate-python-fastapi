@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from functools import partial
 from typing import Final
 
 import structlog
@@ -63,6 +64,7 @@ from src.idempotency.base import (
     storage_key,
     validate_idempotency_key,
 )
+from src.structured.cancel import finalize
 
 logger = structlog.get_logger(__name__)
 
@@ -86,6 +88,15 @@ RETRYABLE_STATUSES: Final[frozenset[int]] = frozenset({408, 425, 429})
 # caller another's session. Nothing here sets cookies on a keyed method anyway —
 # the OAuth routes that do are GETs — so dropping it costs nothing real.
 _STRIPPED_RESPONSE_HEADERS: Final[frozenset[bytes]] = frozenset({b"set-cookie"})
+
+# How long the release of a reservation is protected from cancellation while
+# the request is already unwinding. A constant rather than a setting because
+# it is not a policy anybody would tune: it exists only so a store that has
+# stopped answering cannot hold shutdown open, and every value between "long
+# enough for one Redis round-trip" and "short enough not to matter" behaves
+# identically. Well under the reservation TTL, so overrunning it costs a held
+# reservation that expires on its own rather than a hung process.
+RELEASE_TIMEOUT_SECONDS: Final[float] = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,7 +336,21 @@ class IdempotencyMiddleware:
             # Includes CancelledError: a client that disconnected mid-flight
             # has no response to store, and holding the reservation would
             # answer its retry with 409 for the whole reservation TTL.
-            await self._release(full_key)
+            #
+            # `finalize` rather than a bare `await`, because this is the one
+            # `await` in the middleware that runs on a task somebody has
+            # already cancelled. A second cancellation — a shutdown draining
+            # its tasks, an enclosing `TaskGroup` aborting — lands in the
+            # middle of the release and leaves exactly the held reservation
+            # this block exists to avoid, and only under load. `finalize` also
+            # cannot replace the exception being unwound, which a `protect`
+            # here would: the cancellation it absorbs is re-armed on this task
+            # instead, so the `raise` below is still the original.
+            await finalize(
+                partial(self._release, full_key),
+                name="idempotency-release",
+                timeout=RELEASE_TIMEOUT_SECONDS,
+            )
             raise
 
         if not finished or oversized or status_code >= 500:
