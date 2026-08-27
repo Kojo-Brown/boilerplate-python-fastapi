@@ -143,6 +143,14 @@ from an OOM-killed child), and `gather_bounded` in `src/parallel/io.py` for
 IO — including the two things wrong with plain `asyncio.gather`, both of which
 are asserted against `asyncio` itself in the test suite.
 
+## Streaming exports
+[docs/streaming.md](./docs/streaming.md) — `GET /api/v1/exports/users` streams
+the whole table as NDJSON while holding about 128 KiB of it: a bounded
+read-ahead queue so a slow client throttles the database instead of filling
+memory, a server-side cursor that never fetches the password hash, and a
+terminal record on every stream — because once the first byte is sent the
+status line is spent, and a truncated NDJSON file is a valid NDJSON file.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
