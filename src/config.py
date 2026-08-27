@@ -141,6 +141,29 @@ class Settings(BaseSettings):
     OUTBOX_RETRY_BASE_DELAY_SECONDS: float = 1.0
     OUTBOX_RETRY_MAX_DELAY_SECONDS: float = 300.0
 
+    # Streaming exports (see src/streaming/ and docs/streaming.md).
+    #
+    # CHUNK_BYTES and READAHEAD_CHUNKS multiply into the peak memory one
+    # in-flight export holds, and that product times the number of concurrent
+    # exports is the figure to size a pod against: 64 KiB x 2 x 20 downloads is
+    # 2.5 MiB, which is the whole point of the pair being small numbers rather
+    # than a queue depth in rows.
+    #
+    # BATCH_ROWS is a round-trip knob and not a memory one — the read-ahead
+    # bounds memory whatever the cursor fetches — so it trades latency to the
+    # first chunk against per-batch overhead.
+    #
+    # DEADLINE_SECONDS bounds how long one export may hold a pooled connection
+    # and a server-side cursor, including time spent waiting on a client that
+    # has stopped reading. Past it the stream ends with a `failed` terminal
+    # record rather than a truncation the client cannot detect. It has to sit
+    # above the slowest legitimate export; when it stops being able to, the
+    # answer is an asynchronous export job, not a larger number here.
+    EXPORT_CHUNK_BYTES: int = 65536  # 64 KiB
+    EXPORT_READAHEAD_CHUNKS: int = 2
+    EXPORT_BATCH_ROWS: int = 500
+    EXPORT_DEADLINE_SECONDS: float = 300.0
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

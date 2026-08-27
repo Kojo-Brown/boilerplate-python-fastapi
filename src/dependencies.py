@@ -75,6 +75,7 @@ from src.repositories.user import UserRepository
 from src.storage.base import StorageBackend
 from src.storage.factory import get_storage
 from src.unit_of_work import UnitOfWork
+from src.users.export import UserExportSource
 from src.users.service import ProfileService
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
@@ -142,6 +143,24 @@ def get_if_match(
     return IfMatch.parse(", ".join(if_match))
 
 
+def get_user_export_source(db: DbSession) -> UserExportSource:
+    """Bulk reads of the user table, over this request's session.
+
+    A second, narrower port onto the same repository as `get_user_store`. They
+    are separate because their consumers are: authentication wants one user at
+    a time and an export wants all of them, and a fake for either should not
+    have to implement the other's method. See `src/users/export.py`.
+
+    It shares the request's session by way of `Depends(get_db)`, so the cursor
+    it opens lives exactly as long as the request does — which for a streaming
+    response is until the last chunk has been sent, since FastAPI's exit stack
+    is closed by a middleware wrapped around the whole ASGI call rather than
+    around the handler. `tests/test_export_users.py` asserts that ordering
+    directly, because the entire export breaks quietly if it ever changes.
+    """
+    return UserRepository(db)
+
+
 def get_profile_service(
     uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
 ) -> ProfileService:
@@ -163,6 +182,7 @@ CurrentUserDep = Annotated[User, Depends(get_current_user)]
 IfMatchDep = Annotated[IfMatch, Depends(get_if_match)]
 ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 UserStoreDep = Annotated[UserStore, Depends(get_user_store)]
+UserExportSourceDep = Annotated[UserExportSource, Depends(get_user_export_source)]
 RefreshTokenStoreDep = Annotated[RefreshTokenStore, Depends(get_refresh_token_store)]
 UnitOfWorkDep = Annotated[UnitOfWork, Depends(get_unit_of_work)]
 EventPublisherDep = Annotated[EventPublisher, Depends(get_event_publisher)]
@@ -201,6 +221,7 @@ __all__ = [
     "RefreshTokenStoreDep",
     "StorageDep",
     "UnitOfWorkDep",
+    "UserExportSourceDep",
     "UserStoreDep",
     "get_auth_service",
     "get_cpu_pool",
@@ -209,5 +230,6 @@ __all__ = [
     "get_profile_service",
     "get_refresh_token_store",
     "get_unit_of_work",
+    "get_user_export_source",
     "get_user_store",
 ]
