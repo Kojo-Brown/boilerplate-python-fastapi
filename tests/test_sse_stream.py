@@ -9,11 +9,10 @@ asserting that the detection path exists at all.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, MutableMapping
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 import pytest
-from structlog.testing import capture_logs
 
 from src.sse.event import ServerSentEvent, comment_frame, retry_frame
 from src.sse.stream import LIFETIME_COMMENT, sse_stream
@@ -36,10 +35,39 @@ async def take(stream: AsyncIterator[bytes], count: int) -> list[bytes]:
     return collected
 
 
-def closed_lines(
-    logs: list[MutableMapping[str, Any]],
-) -> list[MutableMapping[str, Any]]:
-    return [line for line in logs if line["event"] == "sse.stream_closed"]
+class RecordingLogger:
+    """Stands in for the module's structlog logger, recording what it is told.
+
+    `structlog.testing.capture_logs` cannot be used for these assertions.
+    `configure_logging` sets `cache_logger_on_first_use=True` and a filtering
+    bound logger at `LOG_LEVEL`, so the first call through a module's logger
+    caches a bound logger carrying that level filter — and an `info` line is
+    then dropped *before* any processor, which is what `capture_logs` swaps.
+    Under CI's `LOG_LEVEL=WARNING` these lines would therefore be invisible,
+    and under a developer's `DEBUG` they would not, making the test pass or
+    fail on configuration it does not own.
+
+    Replacing the logger itself is the seam that does not depend on any of
+    that. Only the methods `src/sse/stream.py` actually calls are provided, so
+    a new call site of another level fails loudly here rather than silently
+    going unasserted.
+    """
+
+    def __init__(self) -> None:
+        self.lines: list[tuple[str, dict[str, Any]]] = []
+
+    def info(self, event: str, **kwargs: Any) -> None:
+        self.lines.append((event, kwargs))
+
+    def closed(self) -> list[dict[str, Any]]:
+        return [kwargs for event, kwargs in self.lines if event == "sse.stream_closed"]
+
+
+@pytest.fixture
+def logger(monkeypatch: pytest.MonkeyPatch) -> RecordingLogger:
+    recorder = RecordingLogger()
+    monkeypatch.setattr("src.sse.stream.logger", recorder)
+    return recorder
 
 
 class TestBody:
@@ -137,31 +165,43 @@ class TestLifetime:
 
 
 class TestOutcomeLogging:
-    async def test_a_source_that_ends_logs_exhausted(self) -> None:
-        with capture_logs() as logs:
-            [f async for f in sse_stream(events(ServerSentEvent(data="a")), name="s")]
+    async def test_a_source_that_ends_logs_exhausted(
+        self, logger: RecordingLogger
+    ) -> None:
+        [f async for f in sse_stream(events(ServerSentEvent(data="a")), name="s")]
 
-        (line,) = closed_lines(logs)
+        (line,) = logger.closed()
         assert line["outcome"] == "exhausted"
         assert line["events"] == 1
         assert line["stream"] == "s"
 
-    async def test_reaching_the_ceiling_logs_lifetime(self) -> None:
+    async def test_exactly_one_line_is_emitted_per_stream(
+        self, logger: RecordingLogger
+    ) -> None:
+        """One stream, one record — this is what a connection count is built on."""
+        [f async for f in sse_stream(events(ServerSentEvent(data="a")), name="s")]
+
+        assert len(logger.closed()) == 1
+
+    async def test_reaching_the_ceiling_logs_lifetime(
+        self, logger: RecordingLogger
+    ) -> None:
         async def never() -> AsyncGenerator[ServerSentEvent, None]:
             await asyncio.Event().wait()
             yield ServerSentEvent(data="x")  # pragma: no cover - never reached
 
-        with capture_logs() as logs:
-            [
-                f
-                async for f in sse_stream(
-                    never(), name="s", heartbeat=TICK, max_seconds=TICK
-                )
-            ]
+        [
+            f
+            async for f in sse_stream(
+                never(), name="s", heartbeat=TICK, max_seconds=TICK
+            )
+        ]
 
-        assert closed_lines(logs)[0]["outcome"] == "lifetime"
+        assert logger.closed()[0]["outcome"] == "lifetime"
 
-    async def test_closing_the_stream_early_logs_aborted(self) -> None:
+    async def test_closing_the_stream_early_logs_aborted(
+        self, logger: RecordingLogger
+    ) -> None:
         """This is the client disconnect, and the line that makes it countable."""
 
         async def never() -> AsyncGenerator[ServerSentEvent, None]:
@@ -170,15 +210,16 @@ class TestOutcomeLogging:
             yield ServerSentEvent(data="x")  # pragma: no cover - never reached
 
         stream = sse_stream(never(), name="s", heartbeat=10.0)
-        with capture_logs() as logs:
-            assert await take(stream, 1) == [b"data: first\n\n"]
-            await stream.aclose()
+        assert await take(stream, 1) == [b"data: first\n\n"]
+        await stream.aclose()
 
-        (line,) = closed_lines(logs)
+        (line,) = logger.closed()
         assert line["outcome"] == "aborted"
         assert line["events"] == 1
 
-    async def test_keepalives_are_not_counted_as_events(self) -> None:
+    async def test_keepalives_are_not_counted_as_events(
+        self, logger: RecordingLogger
+    ) -> None:
         """`events=0` on a long stream is the signal that it carried nothing."""
 
         async def never() -> AsyncGenerator[ServerSentEvent, None]:
@@ -186,11 +227,10 @@ class TestOutcomeLogging:
             yield ServerSentEvent(data="x")  # pragma: no cover - never reached
 
         stream = sse_stream(never(), name="s", heartbeat=TICK)
-        with capture_logs() as logs:
-            assert await take(stream, 2) == [BEAT, BEAT]
-            await stream.aclose()
+        assert await take(stream, 2) == [BEAT, BEAT]
+        await stream.aclose()
 
-        assert closed_lines(logs)[0]["events"] == 0
+        assert logger.closed()[0]["events"] == 0
 
 
 class TestCleanup:
