@@ -27,6 +27,7 @@ from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
 from src.middleware.request_id import RequestIDMiddleware
 from src.outbox.factory import get_outbox_relay
 from src.parallel.factory import get_cpu_pool
+from src.sse.hub import event_stream_hub
 
 
 @asynccontextmanager
@@ -54,6 +55,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.OUTBOX_RELAY_ENABLED:
         await get_outbox_relay().stop()
     event_bus.clear()
+    # After the bus, so nothing is still fanning out into streams that are
+    # being closed. Ending each one is a clean end of body the client
+    # reconnects from — to another replica, if this one is being drained —
+    # rather than the connection reset it gets when the process exits with the
+    # sockets still open.
+    event_stream_hub.close()
     # The idempotency store owns a connection pool. Closing it here rather than
     # leaving it to garbage collection keeps a reload from leaking sockets.
     await get_idempotency_store().close()

@@ -100,7 +100,12 @@ async def test_a_broken_broker_does_not_break_the_publish(
     result = await bus.publish(UserRegistered(user_id="usr_1", email="a@example.com"))
 
     assert [f.subscriber for f in result.failures] == ["email.welcome"]
-    assert result.delivered == 1  # the audit line still went out
+    # Named rather than counted: what matters is that every *other* subscriber
+    # still ran, and a bare number says that only until the next one is added.
+    assert {o.subscriber for o in result.outcomes if o.ok} == {
+        "audit.user_activity",
+        "sse.user_streams",
+    }
 
 
 async def test_only_registrations_get_a_welcome_email(
@@ -120,7 +125,11 @@ def test_register_default_subscribers_attaches_every_spec(bus: EventBus) -> None
     registered = register_default_subscribers(bus)
 
     assert len(registered) == len(DEFAULT_SUBSCRIBERS)
-    assert {s.name for s in registered} == {"audit.user_activity", "email.welcome"}
+    assert {s.name for s in registered} == {
+        "audit.user_activity",
+        "email.welcome",
+        "sse.user_streams",
+    }
 
 
 def test_registering_twice_does_not_double_the_subscribers(bus: EventBus) -> None:

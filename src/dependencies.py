@@ -72,6 +72,7 @@ from src.payments.registry import get_payment_gateway
 from src.repositories.protocols import RefreshTokenStore, UserStore
 from src.repositories.refresh_token import RefreshTokenRepository
 from src.repositories.user import UserRepository
+from src.sse.hub import EventStreamHub, event_stream_hub
 from src.storage.base import StorageBackend
 from src.storage.factory import get_storage
 from src.unit_of_work import UnitOfWork
@@ -161,6 +162,16 @@ def get_user_export_source(db: DbSession) -> UserExportSource:
     return UserRepository(db)
 
 
+def get_event_stream_hub() -> EventStreamHub:
+    """The process-wide fan-out hub open SSE streams subscribe to.
+
+    Returns the module singleton rather than building one: the whole point of a
+    hub is that the publisher and the subscriber find the same registry, and
+    two of them in one process is a stream that never receives anything.
+    """
+    return event_stream_hub
+
+
 def get_profile_service(
     uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
 ) -> ProfileService:
@@ -207,10 +218,17 @@ LockBackendDep = Annotated[LockBackend, Depends(get_lock_backend)]
 # call; there is no provider that returns a *result*, because what to run and
 # how long to allow it are properties of the work, not of the pool.
 CpuPoolDep = Annotated[CpuPool, Depends(get_cpu_pool)]
+# Process-wide, and it has to be: a hub per request would give every stream its
+# own registry, so a published event would reach nobody. Provided through a
+# dependency rather than imported into the route so a test can override it with
+# its own hub instead of publishing into the global one and hoping the teardown
+# runs — the same reason `EventBus` can be constructed per test.
+EventStreamHubDep = Annotated[EventStreamHub, Depends(get_event_stream_hub)]
 
 __all__ = [
     "AuthServiceDep",
     "CpuPoolDep",
+    "EventStreamHubDep",
     "CurrentUserDep",
     "DbSession",
     "EventPublisherDep",

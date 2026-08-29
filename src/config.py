@@ -164,6 +164,35 @@ class Settings(BaseSettings):
     EXPORT_BATCH_ROWS: int = 500
     EXPORT_DEADLINE_SECONDS: float = 300.0
 
+    # Server-sent events (see src/sse/).
+    #
+    # HEARTBEAT_SECONDS is two limits in one number, and the second is the one
+    # that gets forgotten. It has to sit under the shortest idle timeout on the
+    # path — 60s for nginx and most load balancers — or connections are closed
+    # under a quiet stream. It is *also* the ceiling on how long an abandoned
+    # stream holds its subscription, because a failed write is the only way a
+    # disconnect is discovered; see the docstring in src/sse/heartbeat.py.
+    #
+    # RETRY_MS is advice sent to the client for how long to wait before
+    # reconnecting. Raising it thins out the reconnect storm after a deploy;
+    # lowering it shortens the window in which events are missed, since this
+    # application has no replay buffer.
+    #
+    # CLIENT_BUFFER_EVENTS is how far one stream may fall behind before it is
+    # closed with an `overflow` event rather than being allowed to hold events
+    # in memory indefinitely. Worst-case memory is this times the connection
+    # limit times an event.
+    #
+    # MAX_STREAM_SECONDS ends a stream cleanly so the client reconnects. An
+    # infinite connection accumulates whatever the process cannot reclaim
+    # underneath it — a rotated token stays live, a stream stays pinned to a
+    # replica a deploy is trying to drain — and a bounded one turns all of that
+    # into a recurring, ordinary event.
+    SSE_HEARTBEAT_SECONDS: float = 15.0
+    SSE_RETRY_MS: int = 3000
+    SSE_CLIENT_BUFFER_EVENTS: int = 64
+    SSE_MAX_STREAM_SECONDS: float = 3600.0
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
