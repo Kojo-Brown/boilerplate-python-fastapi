@@ -21,6 +21,7 @@ import structlog
 from src.events.base import DomainEvent
 from src.events.bus import EventBus, Subscriber, Subscription, event_bus
 from src.events.catalog import UserEvent, UserRegistered
+from src.sse.bridge import SUBSCRIBER_NAME, publish_user_event_to_streams
 from src.tasks.celery_email import send_welcome_email_task
 
 logger = structlog.get_logger(__name__)
@@ -88,6 +89,15 @@ DEFAULT_SUBSCRIBERS: Final[tuple[SubscriberSpec, ...]] = (
         handler=send_welcome_email_on_registration,
         name="email.welcome",
         timeout=5.0,
+    ),
+    # No timeout, and it is the one spec here that could not need one: the
+    # handler awaits nothing at all. `EventStreamHub.publish` is synchronous
+    # and total, which is what keeps a browser's socket out of the request
+    # that published the event. See src/sse/bridge.py.
+    SubscriberSpec(
+        event_type=UserEvent,
+        handler=publish_user_event_to_streams,
+        name=SUBSCRIBER_NAME,
     ),
 )
 
