@@ -250,6 +250,7 @@ dev = [
     { name = "ruff" },
     { name = "types-authlib" },
     { name = "types-python-jose" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -289,6 +290,7 @@ dev = [
     { name = "ruff", specifier = ">=0.11.0" },
     { name = "types-authlib", specifier = ">=1.7.0" },
     { name = "types-python-jose", specifier = ">=3.5.0" },
+    { name = "websockets", specifier = ">=15.0" },
 ]
 
 [[package]]

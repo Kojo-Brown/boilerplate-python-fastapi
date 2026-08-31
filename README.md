@@ -151,6 +151,17 @@ memory, a server-side cursor that never fetches the password hash, and a
 terminal record on every stream — because once the first byte is sent the
 status line is spent, and a truncated NDJSON file is a valid NDJSON file.
 
+## WebSockets
+[docs/websockets.md](./docs/websockets.md) — `GET /api/v1/ws`, for the half of
+real-time work SSE has no answer to: messages travelling *up*, fanned out to a
+room of others. A browser's `WebSocket` constructor cannot set a header, so the
+credential rides `Sec-WebSocket-Protocol` and never the query string; the
+connection carries its access token's expiry as a deadline, because verifying
+`exp` only at the handshake grants an access that never ends; the whole
+connection is one request, so the per-address limiter counts it once and a
+per-connection budget takes over — one that neither sleeps nor queues, because
+both make the flood they were meant to stop worse.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

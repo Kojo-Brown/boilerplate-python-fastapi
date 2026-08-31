@@ -3,7 +3,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 import structlog
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -29,22 +29,33 @@ class RequestIDMiddleware:
             await self.app(scope, receive, send)
             return
 
-        request = Request(scope)
+        # `HTTPConnection` rather than `Request`, because the latter asserts
+        # `scope["type"] == "http"` in its constructor. This branch has always
+        # said it handled `websocket` scopes and, until there was a WebSocket
+        # route to send through it, never had to: the first connection to
+        # `/api/v1/ws` failed the assertion and became a 500 the client saw as
+        # a rejected upgrade. Everything used below — headers, url, client — is
+        # on the base class and identical for both scope types.
+        connection = HTTPConnection(scope)
+        is_http = scope["type"] == "http"
 
-        request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
-        client_host = request.client.host if request.client else "unknown"
+        request_id = connection.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
+        client_host = connection.client.host if connection.client else "unknown"
 
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             request_id=request_id,
-            method=request.method,
-            path=request.url.path,
+            # A WebSocket handshake is a GET whose point is the upgrade, so the
+            # method says nothing a reader of these logs wants; the scope type
+            # is what distinguishes a connection from a request.
+            method=scope["method"] if is_http else "WEBSOCKET",
+            path=connection.url.path,
             client=client_host,
         )
 
         logger.info(
             "request.started",
-            query=str(request.url.query) or None,
+            query=str(connection.url.query) or None,
         )
 
         status_code = 500
@@ -59,6 +70,18 @@ class RequestIDMiddleware:
                     (REQUEST_ID_HEADER.lower().encode(), request_id.encode())
                 )
                 message = {**message, "headers": headers}
+            elif message["type"] == "websocket.accept":
+                # There is no status line on an accepted upgrade. 101 is what
+                # the server puts on the wire, and recording it keeps the
+                # completion log one shape rather than two.
+                status_code = 101
+            elif message["type"] == "websocket.close" and status_code == 500:
+                # Closed before it was ever accepted, which uvicorn answers as
+                # HTTP 403 — the close code passed by the application is
+                # discarded at that stage, so 403 is what the client saw and
+                # 403 is what belongs in the log. A close *after* accept leaves
+                # the 101 alone: the connection did open.
+                status_code = 403
             await send(message)
 
         try:
