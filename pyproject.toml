@@ -52,6 +52,13 @@ dev-dependencies = [
     "faker>=37.0.0",
     "factory-boy>=3.3.0",
     "pytest-factoryboy>=2.7.0",
+    # Already present transitively through uvicorn[standard], but
+    # `tests/test_ws_endpoint.py` imports it directly to be a WebSocket
+    # *client* against a real server — and a package you import is a package
+    # you depend on. The same reasoning as `redis` above: an extra that stops
+    # shipping it one day should be a resolver error rather than a collection
+    # error in CI.
+    "websockets>=15.0",
 ]
 
 [tool.pytest.ini_options]

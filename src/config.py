@@ -193,6 +193,56 @@ class Settings(BaseSettings):
     SSE_CLIENT_BUFFER_EVENTS: int = 64
     SSE_MAX_STREAM_SECONDS: float = 3600.0
 
+    # WebSockets (see src/ws/).
+    #
+    # MAX_MESSAGE_BYTES is *not* the real ceiling on an inbound frame. By the
+    # time application code sees a message the ASGI server has already read it,
+    # so uvicorn's own `--ws-max-size` (16 MiB by default) is what stops a large
+    # frame; this only decides what is then rejected. Lower both, together.
+    #
+    # MAX_ROOMS_PER_CONNECTION bounds how much of the process's traffic one
+    # client can make itself a recipient of. Each membership is an entry in the
+    # registry and a share of every broadcast to that room.
+    #
+    # OUTBOUND_BUFFER_MESSAGES is how far one connection may fall behind before
+    # it is closed rather than allowed to hold messages in memory. Worst-case
+    # memory is this times the connection count times a message — the same
+    # arithmetic as SSE_CLIENT_BUFFER_EVENTS, over a larger message.
+    #
+    # IDLE_TIMEOUT_SECONDS closes a connection nothing has been received on.
+    # It is not a liveness check: WebSocket ping/pong is handled by the ASGI
+    # server and has no ASGI message type, so an application cannot observe a
+    # pong. Clients that want to stay open through a quiet period send the
+    # protocol's own `{"type":"ping"}`.
+    #
+    # MAX_CONNECTION_SECONDS ends a connection cleanly so the client
+    # reconnects, for the reason SSE_MAX_STREAM_SECONDS exists. It is a
+    # *ceiling*, not the usual lifetime: a connection also ends when its access
+    # token expires, which at the default ACCESS_TOKEN_EXPIRE_MINUTES is far
+    # sooner and is the limit most connections actually meet.
+    #
+    # The four rate-limit values are per connection, not per address: a
+    # WebSocket is one request no matter how many messages travel down it, so
+    # the middleware limiter in src/limiter.py counts it once and never again.
+    # Both a message budget and a byte budget, because either alone is trivial
+    # to evade — see src/ws/ratelimit.py. BYTE_BURST must be at least
+    # MAX_MESSAGE_BYTES or a maximum-size message could never be afforded;
+    # Connection refuses to be constructed otherwise.
+    #
+    # MAX_RATE_VIOLATIONS is *consecutive* rejections before the connection is
+    # closed. An accepted message resets it, so an application that
+    # occasionally bumps the ceiling is never disconnected for it.
+    WS_MAX_MESSAGE_BYTES: int = 65536  # 64 KiB
+    WS_MAX_ROOMS_PER_CONNECTION: int = 16
+    WS_OUTBOUND_BUFFER_MESSAGES: int = 128
+    WS_IDLE_TIMEOUT_SECONDS: float = 120.0
+    WS_MAX_CONNECTION_SECONDS: float = 3600.0
+    WS_MESSAGES_PER_SECOND: float = 10.0
+    WS_MESSAGE_BURST: int = 30
+    WS_BYTES_PER_SECOND: float = 262144.0  # 256 KiB/s
+    WS_BYTE_BURST: int = 1048576  # 1 MiB
+    WS_MAX_RATE_VIOLATIONS: int = 20
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

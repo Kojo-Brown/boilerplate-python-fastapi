@@ -28,6 +28,7 @@ from src.middleware.request_id import RequestIDMiddleware
 from src.outbox.factory import get_outbox_relay
 from src.parallel.factory import get_cpu_pool
 from src.sse.hub import event_stream_hub
+from src.ws.rooms import room_registry
 
 
 @asynccontextmanager
@@ -61,6 +62,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # rather than the connection reset it gets when the process exits with the
     # sockets still open.
     event_stream_hub.close()
+    # And the same for rooms, which are the other thing a publisher can still
+    # be fanning out into. Emptying the registry does not close the sockets —
+    # uvicorn's own shutdown does that, and each connection's `finally` handles
+    # its own membership — but it stops a broadcast in flight from queueing
+    # messages into connections that are being torn down.
+    room_registry.close()
     # The idempotency store owns a connection pool. Closing it here rather than
     # leaving it to garbage collection keeps a reload from leaking sockets.
     await get_idempotency_store().close()
