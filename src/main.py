@@ -21,6 +21,7 @@ from src.exception_handlers import (
 from src.exceptions import AppException
 from src.health import router as health_router
 from src.idempotency.factory import get_idempotency_store
+from src.kafka.factory import get_message_publisher
 from src.limiter import limiter
 from src.logging_config import configure_logging
 from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
@@ -47,7 +48,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # its relays as separate processes; see src/config.py.
     if settings.OUTBOX_RELAY_ENABLED:
         get_outbox_relay().start()
+    # Connecting here rather than at the first publish is what makes a
+    # misconfigured broker a failed start-up instead of a failed request: the
+    # producer fetches metadata in `start()`, so an unreachable cluster is
+    # discovered before this process is put into a load balancer. Off by
+    # default — this application publishes nothing of its own yet — and a
+    # no-op beyond bookkeeping under the in-memory backend.
+    if settings.KAFKA_ENABLED:
+        await get_message_publisher().start()
     yield
+    # Before anything else that might still want to publish. `stop()` flushes,
+    # and what it flushes is records that exist only in this process's memory.
+    if settings.KAFKA_ENABLED:
+        await get_message_publisher().stop()
     # First, and before the bus is cleared: the relay is the only thing still
     # publishing by now, and an event dispatched to a bus with no subscribers
     # is a *successful* delivery whose row is then deleted. Stopping it here

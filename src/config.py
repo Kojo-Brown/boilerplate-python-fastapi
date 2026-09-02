@@ -243,6 +243,54 @@ class Settings(BaseSettings):
     WS_BYTE_BURST: int = 1048576  # 1 MiB
     WS_MAX_RATE_VIOLATIONS: int = 20
 
+    # Kafka (see src/kafka/ and docs/kafka.md).
+    #
+    # BACKEND is "kafka" or "memory". The in-memory broker is a model, not an
+    # emulator: it keeps records in this process and forgets them when it
+    # exits, so it is for tests and single-process development only. It is the
+    # default because a boilerplate that refuses to start without a cluster is
+    # a boilerplate nobody runs.
+    #
+    # ENABLED decides whether the *application* starts a publisher in its
+    # lifespan. Off by default: this repository publishes nothing of its own
+    # yet, and a publisher started against an unreachable broker fails
+    # start-up, which is the right behaviour for a service that needs one and
+    # the wrong one for a service that does not.
+    #
+    # CONSUMER_GROUP is the identity offsets are stored against, so it outlives
+    # every process that uses it and renaming it re-reads the topic from
+    # AUTO_OFFSET_RESET. Two processes sharing a group split the partitions;
+    # two groups each receive everything.
+    #
+    # HANDLER_TIMEOUT_SECONDS must stay well below MAX_POLL_INTERVAL_MS: a
+    # batch that takes longer than that in total makes the broker treat this
+    # member as gone and hand its partitions — and its in-flight records — to
+    # somebody else while it is still working on them.
+    #
+    # MAX_RECORDS x HANDLER_TIMEOUT_SECONDS is therefore the number to compare
+    # against MAX_POLL_INTERVAL_MS when tuning either.
+    KAFKA_BACKEND: Literal["kafka", "memory"] = "memory"
+    KAFKA_ENABLED: bool = False
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_CLIENT_ID: str = "boilerplate-python-fastapi"
+    KAFKA_CONSUMER_GROUP: str = "boilerplate-python-fastapi"
+    KAFKA_AUTO_OFFSET_RESET: Literal["earliest", "latest", "none"] = "earliest"
+    KAFKA_MAX_RECORDS: int = 100
+    KAFKA_POLL_TIMEOUT_SECONDS: float = 1.0
+    KAFKA_HANDLER_TIMEOUT_SECONDS: float = 30.0
+    KAFKA_SESSION_TIMEOUT_MS: int = 10000
+    KAFKA_HEARTBEAT_INTERVAL_MS: int = 3000
+    KAFKA_MAX_POLL_INTERVAL_MS: int = 300000
+    KAFKA_REQUEST_TIMEOUT_MS: int = 15000
+    KAFKA_LINGER_MS: int = 0
+    KAFKA_RETRY_BASE_DELAY_SECONDS: float = 1.0
+    KAFKA_RETRY_MAX_DELAY_SECONDS: float = 60.0
+    KAFKA_SHUTDOWN_TIMEOUT_SECONDS: float = 10.0
+    #: Partitions given to a topic the in-memory broker creates on demand. No
+    #: effect on a real cluster, where the broker's own `num.partitions` and
+    #: any explicit topic creation decide.
+    KAFKA_MEMORY_PARTITIONS: int = 2
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

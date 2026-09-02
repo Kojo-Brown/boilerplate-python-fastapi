@@ -127,6 +127,40 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Single-node KRaft broker. Without it the Kafka legs of
+      # tests/test_kafka_contract.py and tests/test_kafka_end_to_end.py skip,
+      # and a suite that silently skips its integration half is how a backend
+      # rots — so this is not optional here, unlike on a developer's machine.
+      # It advertises localhost:9092 because the job runs on the host with the
+      # port mapped, so the address the client is handed after the metadata
+      # fetch has to be the one it dialled.
+      kafka:
+        image: apache/kafka:3.9.0
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          # Zero rather than the three-second default: every consumer group in
+          # the suite is created for one test, so the delay would be three
+          # seconds per group with nobody to wait for.
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+        ports:
+          - 9092:9092
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 10
+          --health-start-period 20s
+
     # Throwaway values for ephemeral CI services. Never reuse these anywhere.
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/boilerplate_test
@@ -137,6 +171,7 @@ jobs:
       ENVIRONMENT: test
       LOG_LEVEL: WARNING
       REDIS_URL: redis://localhost:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_REGION: us-east-1
