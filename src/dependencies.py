@@ -63,6 +63,8 @@ from src.database import get_db
 from src.distributed_lock.base import LockBackend
 from src.distributed_lock.factory import get_lock_backend
 from src.events.base import EventPublisher
+from src.kafka.base import MessagePublisher
+from src.kafka.factory import get_message_publisher
 from src.models.user import User
 from src.outbox.publisher import OutboxPublisher
 from src.parallel.cpu import CpuPool
@@ -224,6 +226,12 @@ CpuPoolDep = Annotated[CpuPool, Depends(get_cpu_pool)]
 # its own hub instead of publishing into the global one and hoping the teardown
 # runs — the same reason `EventBus` can be constructed per test.
 EventStreamHubDep = Annotated[EventStreamHub, Depends(get_event_stream_hub)]
+# Process-wide and started by the lifespan when KAFKA_ENABLED is on. One
+# publisher per request would pay a metadata fetch and a connection handshake
+# per record and would batch nothing, which is why this is cached rather than
+# built here. There is no consumer dependency beside it: a consumer is a
+# background loop with a lifetime of its own, not something a request borrows.
+MessagePublisherDep = Annotated[MessagePublisher, Depends(get_message_publisher)]
 
 __all__ = [
     "AuthServiceDep",
@@ -234,6 +242,7 @@ __all__ = [
     "EventPublisherDep",
     "IfMatchDep",
     "LockBackendDep",
+    "MessagePublisherDep",
     "PaymentGatewayDep",
     "ProfileServiceDep",
     "RefreshTokenStoreDep",
@@ -245,6 +254,7 @@ __all__ = [
     "get_cpu_pool",
     "get_event_publisher",
     "get_if_match",
+    "get_message_publisher",
     "get_profile_service",
     "get_refresh_token_store",
     "get_unit_of_work",

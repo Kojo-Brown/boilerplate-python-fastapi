@@ -95,6 +95,12 @@ SWALLOWED_CANCELLATION_EXEMPTIONS: Final[dict[str, str]] = {
         "whoever is shutting the application down, which is the opposite of "
         "what asking a relay to stop should do."
     ),
+    "src.kafka.runner.ConsumerRunner.stop": (
+        "The same shape as `OutboxRelay.stop`, one line at a time: this method "
+        "cancelled the consume loop itself and is awaiting the unwinding — "
+        "which is what leaves the consumer group. Re-raising would cancel "
+        "whoever is shutting the application down."
+    ),
     "src.distributed_lock.lock.DistributedLock._stop_renewer": (
         "Same shape: the renewal task was cancelled by this method, so the "
         "`CancelledError` is the acknowledgement rather than a request. A "

@@ -162,6 +162,17 @@ connection is one request, so the per-address limiter counts it once and a
 per-connection budget takes over — one that neither sleeps nor queues, because
 both make the flood they were meant to stop worse.
 
+## Kafka
+[docs/kafka.md](./docs/kafka.md) — a producer, a consumer group and a consume
+loop that commits offsets by hand, in `src/kafka`. An offset is a per-partition
+watermark rather than an acknowledgement of a record, which is why a committed
+offset is `record.offset + 1` and why the outbox's per-event failure isolation
+would *drop* records here: a partition stops at its first failing record and is
+seeked back to it, and the others carry on. Auto-commit is off and is not a
+setting, because it stores offsets for records the fetcher handed over rather
+than ones that were handled. An in-process broker models partitions, groups and
+assignment so the whole package is testable — and runnable — without a cluster.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

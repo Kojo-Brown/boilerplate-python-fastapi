@@ -26,6 +26,7 @@ dependencies = [
     # resolver error, not an ImportError at start-up.
     "redis>=6.4.0",
     "boto3>=1.35.0",
+    "aiokafka>=0.14.0",
 ]
 
 [build-system]
@@ -96,3 +97,15 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+# aiokafka ships no `py.typed` marker, so under strict mode every import of it
+# is an error rather than an untyped symbol. Silencing that here is deliberate
+# and bounded: the driver's objects are `Any` inside `src/kafka/producer.py`
+# and `src/kafka/consumer.py`, which are the only two modules that import it,
+# and everything they hand back to the rest of the codebase is rebuilt from
+# primitives into the declared types in `src/kafka/base.py`. The policy in
+# `src/kafka/runner.py` never sees an `Any` at all, which is why it is a
+# separate module.
+[[tool.mypy.overrides]]
+module = ["aiokafka.*"]
+ignore_missing_imports = true
