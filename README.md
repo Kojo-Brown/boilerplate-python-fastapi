@@ -173,6 +173,20 @@ setting, because it stores offsets for records the fetcher handed over rather
 than ones that were handled. An in-process broker models partitions, groups and
 assignment so the whole package is testable — and runnable — without a cluster.
 
+## Dead-letter queue
+[docs/dead-letter-queue.md](./docs/dead-letter-queue.md) — a retry ladder in
+`src/dlq`, so one poison record stops holding up its partition. A delay is a
+*topic* rather than a sleep, because sleeping in a consumer stalls the
+partition it was meant to unblock and a sleep past `max.poll.interval.ms` gets
+the member evicted mid-batch. The tier delay is fixed and never jittered —
+the opposite of every other backoff here — because a tier consumer stalls at
+the first record that is not due, and that is only complete if due time rises
+with offset. What it costs is per-key ordering for records that fail, which is
+why it is opt-in per handler rather than something the runner does. The
+routing publish is what makes committing past a failed record safe, so a
+broker that refuses it stalls the partition instead: the one outcome this must
+not have is a record that exists nowhere.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

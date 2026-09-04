@@ -25,7 +25,9 @@ from src.kafka.base import (
     ConsumedMessage,
     ConsumerError,
     MessageSource,
+    MessagingError,
     Partition,
+    RetryAfter,
     utc_now,
 )
 from src.kafka.runner import ConsumerConfig, ConsumerRunner
@@ -477,3 +479,157 @@ class TestConfiguration:
             source=FakeSource(), handler=RecordingHandler(), name="audit"
         )
         assert runner.name == "audit"
+
+
+class DeferringHandler:
+    """Raises `RetryAfter` for the offsets it is told are not due yet."""
+
+    def __init__(
+        self,
+        *,
+        defer: dict[tuple[Partition, int], float] | None = None,
+        fail_on: set[tuple[Partition, int]] | None = None,
+    ) -> None:
+        self.seen: list[ConsumedMessage] = []
+        self.defer = defer or {}
+        self.fail_on = fail_on or set()
+
+    async def __call__(self, message: ConsumedMessage) -> None:
+        self.seen.append(message)
+        coordinates = (message.partition, message.offset)
+        delay = self.defer.get(coordinates)
+        if delay is not None:
+            raise RetryAfter(delay, reason="not due yet")
+        if coordinates in self.fail_on:
+            raise RuntimeError(f"handler refused {message.partition}@{message.offset}")
+
+
+class TestARecordThatIsNotDueYet:
+    """`RetryAfter` is the third outcome, and it is neither of the other two.
+
+    A retry tier's consumer spends most of its time holding records that are
+    not due. Counting those as failures would start an exponential backoff
+    against a partition in perfect health, log `kafka.partition_stalled` every
+    time the tier did its job, and — because the runner's own backoff is capped
+    at `retry_max_delay` — poll a record due in fifteen minutes several hundred
+    times to be told no.
+    """
+
+    async def test_it_is_neither_delivered_nor_failed(self) -> None:
+        source = FakeSource([[a_message(P0, 0)]])
+        handler = DeferringHandler(defer={(P0, 0): 125.0})
+
+        result = await a_runner(source, handler).consume_once()  # type: ignore[arg-type]
+
+        assert (result.delivered, result.failed, result.deferred) == (0, 0, 1)
+
+    async def test_it_does_not_count_towards_a_partitions_backoff(self) -> None:
+        source = FakeSource([[a_message(P0, 0)], [a_message(P0, 0)]])
+        runner = a_runner(source, DeferringHandler(defer={(P0, 0): 30.0}))  # type: ignore[arg-type]
+
+        await runner.consume_once()
+        await runner.consume_once()
+
+        assert runner.failing_partitions == frozenset()
+
+    async def test_the_wait_is_the_one_the_handler_named(self) -> None:
+        """Not the runner's jittered backoff, which knows nothing about it."""
+        source = FakeSource([[a_message(P0, 0)]])
+
+        result = await a_runner(
+            source, DeferringHandler(defer={(P0, 0): 125.0})
+        ).consume_once()  # type: ignore[arg-type]
+
+        assert result.defer_delay == 125.0
+        assert result.retry_delay == 0.0
+        assert result.wait == 125.0
+
+    async def test_the_record_is_seeked_back_so_it_returns(self) -> None:
+        source = FakeSource([[a_message(P0, 0)]])
+
+        await a_runner(source, DeferringHandler(defer={(P0, 0): 30.0})).consume_once()  # type: ignore[arg-type]
+
+        assert source.seeks == [(P0, 0)]
+        assert source.commits == []
+
+    async def test_nothing_behind_it_in_the_partition_is_handled(self) -> None:
+        """Correct and complete rather than a compromise, because a retry tier
+        is ordered by due time: the delay is fixed per tier, so nothing behind
+        a record that is not due is due either."""
+        source = FakeSource([[a_message(P0, 0), a_message(P0, 1), a_message(P0, 2)]])
+        handler = DeferringHandler(defer={(P0, 0): 30.0})
+
+        await a_runner(source, handler).consume_once()  # type: ignore[arg-type]
+
+        assert [message.offset for message in handler.seen] == [0]
+
+    async def test_other_partitions_are_unaffected(self) -> None:
+        source = FakeSource([[a_message(P0, 0), a_message(P1, 0)]])
+        handler = DeferringHandler(defer={(P0, 0): 30.0})
+
+        result = await a_runner(source, handler).consume_once()  # type: ignore[arg-type]
+
+        assert result.delivered == 1
+        assert source.commits == [{P1: 1}]
+
+
+class TestHowLongTheLoopWaits:
+    """The soonest wait wins, which is the opposite of the failure rule.
+
+    Overshooting costs a record's latency; undershooting costs one cheap
+    poll-and-defer. So the loop wakes for whichever partition is ready first
+    and lets the rest say "not yet" again.
+    """
+
+    async def test_the_soonest_of_two_deferrals_decides(self) -> None:
+        source = FakeSource([[a_message(P0, 0), a_message(P1, 0)]])
+        handler = DeferringHandler(defer={(P0, 0): 300.0, (P1, 0): 5.0})
+
+        result = await a_runner(source, handler).consume_once()  # type: ignore[arg-type]
+
+        assert result.defer_delay == 5.0
+
+    async def test_a_failure_and_a_deferral_wait_the_shorter_of_the_two(self) -> None:
+        source = FakeSource([[a_message(P0, 0), a_message(P1, 0)]])
+        handler = DeferringHandler(defer={(P1, 0): 300.0}, fail_on={(P0, 0)})
+
+        result = await a_runner(source, handler).consume_once()  # type: ignore[arg-type]
+
+        assert (result.retry_delay, result.defer_delay) == (1.0, 300.0)
+        assert result.wait == 1.0
+
+    async def test_a_healthy_batch_still_waits_for_nothing(self) -> None:
+        source = FakeSource([[a_message(P0, 0)]])
+
+        result = await a_runner(source, DeferringHandler()).consume_once()  # type: ignore[arg-type]
+
+        assert result.wait == 0.0
+
+    async def test_the_loop_sleeps_for_the_deferral(self) -> None:
+        source = FakeSource([[a_message(P0, 0)]])
+        sleeps: list[float] = []
+        runner = a_runner(
+            source,
+            DeferringHandler(defer={(P0, 0): 42.0}),
+            sleeps=sleeps,  # type: ignore[arg-type]
+        )
+
+        runner.start()
+        await asyncio.sleep(0.05)
+        await runner.stop()
+
+        assert 42.0 in sleeps
+
+
+class TestRetryAfterItself:
+    def test_it_refuses_a_negative_delay(self) -> None:
+        with pytest.raises(ValueError, match="cannot be negative"):
+            RetryAfter(-1.0)
+
+    def test_it_carries_a_reason_for_the_log(self) -> None:
+        assert RetryAfter(30.0, reason="not due yet").reason == "not due yet"
+
+    def test_it_is_not_a_messaging_error(self) -> None:
+        """Nothing has gone wrong, so it must not render as a 503 if it ever
+        escapes to a request path."""
+        assert not isinstance(RetryAfter(1.0), MessagingError)

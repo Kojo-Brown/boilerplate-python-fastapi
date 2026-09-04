@@ -291,6 +291,39 @@ class Settings(BaseSettings):
     #: any explicit topic creation decide.
     KAFKA_MEMORY_PARTITIONS: int = 2
 
+    # Dead-letter queue and retry ladder (see src/dlq, docs/dead-letter-queue.md).
+    #
+    # A tier is a topic, not a sleep: `orders.events` fails over to
+    # `orders.events.retry.1`, then `.2`, then `.3`, then
+    # `orders.events.dlt`. RETRY_TIERS x the delays below is how long a record
+    # can be retried for, and MAX_DELAY x TIERS is the age of the oldest record
+    # a handler can still be handed — worth comparing against whatever the
+    # handler assumes about freshness.
+    #
+    # The tier delay is fixed and deliberately not jittered, unlike every other
+    # backoff in this codebase. A tier consumer stalls at the first record that
+    # is not due, which is only complete if due time rises with offset, and
+    # jitter is exactly what breaks that.
+    #
+    # The two SUFFIX settings are an interface, not a preference: every
+    # consumer of a topic derives the same names from them, and changing one
+    # orphans whatever is already sitting in the old topics.
+    DLQ_RETRY_TIERS: int = 3
+    DLQ_RETRY_BASE_DELAY_SECONDS: float = 5.0
+    DLQ_RETRY_MULTIPLIER: float = 5.0
+    DLQ_RETRY_MAX_DELAY_SECONDS: float = 900.0
+    DLQ_RETRY_TOPIC_SUFFIX: str = ".retry"
+    DLQ_DEAD_LETTER_TOPIC_SUFFIX: str = ".dlt"
+    #: Appended to KAFKA_CONSUMER_GROUP for the consumer that reads the retry
+    #: tiers. A separate group so that the tiers' lag is a separate number from
+    #: the origin topic's on every dashboard — during an incident the first
+    #: question is which of the two is behind.
+    DLQ_RETRY_GROUP_SUFFIX: str = ".retry"
+    #: How many times one dead letter may be put back on its origin topic
+    #: before a person has to decide. The guard against a replay consumer left
+    #: running, which is a loop whose lag reads as zero throughout.
+    DLQ_MAX_REPLAYS: int = 3
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

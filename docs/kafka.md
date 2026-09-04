@@ -58,11 +58,14 @@ A partition that keeps failing stops, and its lag grows. That is what ordering
 costs. Releasing record 6 while 5 is unresolved means the topic is no longer
 ordered, and ordering is the reason to have chosen a key in the first place.
 
-The escape is the next item in this phase — a dead-letter queue, where a record
-that has failed enough times is moved aside so the partition continues. Until
-then a poison record retries at the capped backoff interval, visible in the log
-(`kafka.partition_stalled`, with `attempts`) and in the group's lag, rather than
-silently dropped.
+Left alone, a poison record retries at the capped backoff interval, visible in
+the log (`kafka.partition_stalled`, with `attempts`) and in the group's lag,
+rather than silently dropped.
+
+`src/dlq` is the escape — a record that has failed enough times is moved aside
+so the partition continues — and it is opt-in per handler, because giving up
+ordering is only free when a key's records are independent of one another. See
+[docs/dead-letter-queue.md](./dead-letter-queue.md).
 
 ## At-least-once, and where the duplicates come from
 
@@ -193,7 +196,9 @@ created explicitly with two partitions: a cluster's `num.partitions` defaults to
 
 ## Not done here
 
-- **Dead-letter queue and a retry ladder** — the next item in Phase 8.
+- **Anything the dead-letter queue does.** That lives in `src/dlq` and is a
+  wrapper around a handler rather than a change to this package;
+  [docs/dead-letter-queue.md](./dead-letter-queue.md) has it.
 - **Transactions / exactly-once.** The producer is idempotent, which
   deduplicates its own retries and nothing else. Read-process-write with
   `send_offsets_to_transaction` is a different design, and it only reaches
