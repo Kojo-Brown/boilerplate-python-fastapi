@@ -156,10 +156,13 @@ that one, forever, which is how an outbox becomes an outage.
 The backoff is full-jitter exponential (`backoff_delay`, shared with
 `src/decorators/retry.py` and `src/locking/retry.py`), computed from the row's
 `attempts` and capped at `OUTBOX_RETRY_MAX_DELAY_SECONDS`. There is **no
-maximum attempt count and no dead-letter queue** — that is the next item in
-Phase 8. Until then a permanently poison event retries at the capped interval
-forever, visible in `attempts` and `last_error`, and it cannot starve the queue
-because the backoff pushes it behind everything that is ready.
+maximum attempt count and no dead-letter queue**, and `src/dlq` is not it: that
+ladder moves a record between Kafka *topics*, and an outbox event is a row in a
+table. What this would need is a maximum attempt count and somewhere to move
+the row to, which is a smaller change and a separate one. Until then a
+permanently poison event retries at the capped interval forever, visible in
+`attempts` and `last_error`, and it cannot starve the queue because the backoff
+pushes it behind everything that is ready.
 
 Two failure modes are worth naming:
 
@@ -219,7 +222,8 @@ assert result.delivered == 1
 - **Exactly-once delivery.** Nothing does, across two systems. At-least-once
   plus an idempotent consumer is the achievable shape.
 - **Ordering.** See above.
-- **A dead-letter queue.** Phase 8.
+- **A dead-letter queue for the outbox table.** `src/dlq` covers Kafka records
+  only — see above for why the two are not the same change.
 - **Delivery to anything but the in-process bus.** The relay dispatches to an
   `EventDispatcher`; pointing that at Kafka or a webhook fan-out is a different
   implementation of one protocol, and a later item.

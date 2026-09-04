@@ -22,16 +22,21 @@ idempotent. `enable_auto_commit` is off and is not a setting — see the module
 docstring in `consumer.py` for why leaving it on is at-most-once delivery
 arrived at by leaving a default alone.
 
-## What it does not do yet
+## A poison record, and the escape from it
 
-A poison record retries forever at the capped backoff interval, and its
-partition does not advance while it does. That is the honest cost of ordering,
-and the escape is the next item in this phase: a dead-letter queue, where a
-record that has failed enough times is moved aside so the partition can
-continue. Also absent: transactions (the producer is idempotent, which
-deduplicates its own retries and nothing else), schema registry integration,
-and any consumer wired into this application — `docs/kafka.md` has the entry
-point, and `create_consumer_runner` is what it calls.
+Left alone, a poison record retries forever at the capped backoff interval and
+its partition does not advance while it does. That is the honest cost of
+ordering. `src/dlq` is the escape — wrap a handler in `with_dead_letter` and a
+failure is published to a retry topic so this loop can commit past it — and it
+is opt-in per handler, because the stall is the right behaviour for a topic
+whose records are a sequence of edits to one key.
+
+## What it does not do
+
+Transactions (the producer is idempotent, which deduplicates its own retries
+and nothing else), schema registry integration, and any consumer wired into
+this application — `docs/kafka.md` has the entry point, and
+`create_consumer_runner` is what it calls.
 
 See `docs/kafka.md`.
 """
@@ -49,6 +54,7 @@ from src.kafka.base import (
     Partition,
     PublishedMessage,
     PublishError,
+    RetryAfter,
 )
 from src.kafka.codec import decode_json, encode_json
 from src.kafka.consumer import ConsumerConnectionConfig, KafkaMessageSource
@@ -89,6 +95,7 @@ __all__ = [
     "ProducerConfig",
     "PublishError",
     "PublishedMessage",
+    "RetryAfter",
     "create_consumer_runner",
     "create_message_publisher",
     "create_message_source",

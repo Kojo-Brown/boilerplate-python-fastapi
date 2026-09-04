@@ -31,11 +31,25 @@ rebalance — hours later, in a batch whose other records are unrelated.
 
 A partition that keeps failing stops, and its lag grows. That is what ordering
 costs: releasing record 6 while 5 is unresolved means the topic is no longer
-ordered, and ordering is the reason to have chosen a key. The escape is the
-next item in this phase — a dead-letter queue, where a record that has failed
-enough times is moved aside and the partition continues. Until then a poison
+ordered, and ordering is the reason to have chosen a key. Left alone, a poison
 record retries at the capped backoff interval, visible in the log and in the
 group's lag rather than silently dropped.
+
+`src/dlq` is the escape, and it is opt-in per handler because the stall is
+sometimes the behaviour you want. Wrapping a handler in `with_dead_letter`
+makes a failure publish the record to a retry topic and *return*, so this loop
+commits past it and the partition continues — at the price of that record being
+handled after ones produced behind it.
+
+## A handler can also say "not yet"
+
+`RetryAfter` is the third thing a handler can do, alongside returning and
+raising. The partition stops at the record and is seeked back to it, as with a
+failure, but nothing is counted as failed and the wait is the one the handler
+named rather than an exponential backoff. It exists because a retry tier's
+consumer spends most of its time holding records that are not due, and counting
+those as failures would start a backoff against a healthy partition and log a
+warning every time the tier did its job.
 
 ## At-least-once, and where the duplicates come from
 
@@ -56,12 +70,19 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Final
 
 import structlog
 
 from src.decorators.base import backoff_delay
-from src.kafka.base import ConsumedMessage, ConsumerError, MessageSource, Partition
+from src.kafka.base import (
+    ConsumedMessage,
+    ConsumerError,
+    MessageSource,
+    Partition,
+    RetryAfter,
+)
 from src.structured import finalize
 
 logger = structlog.get_logger(__name__)
@@ -75,6 +96,20 @@ Sleeper = Callable[[float], Awaitable[None]]
 #: Name given to the background task, so a hung consumer is identifiable in
 #: `asyncio.all_tasks()` and in a debugger.
 TASK_NAME_PREFIX: Final[str] = "kafka-consumer"
+
+
+class _Outcome(Enum):
+    """What one record's handler did. Three states, not two.
+
+    `DEFERRED` is the one worth naming: a handler that raises `RetryAfter` has
+    not failed, so counting it as a failure would start an exponential backoff
+    against a partition in perfect health and log a warning every time a retry
+    tier does exactly what it exists to do.
+    """
+
+    DONE = auto()
+    FAILED = auto()
+    DEFERRED = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,10 +173,31 @@ class ConsumeResult:
     #: whichever partition has failed most. Zero when nothing failed — a
     #: healthy consumer never sleeps, because the poll already blocks.
     retry_delay: float = 0.0
+    #: Records a handler declined with `RetryAfter` because they are not due
+    #: yet. Not failures: nothing about them is wrong, and none of them counts
+    #: towards a partition's backoff.
+    deferred: int = 0
+    #: The *soonest* a deferred record becomes due, not the latest. Minimum
+    #: rather than maximum because a poll that arrives early for one partition
+    #: costs a fetch and a seek, while a poll that arrives late for another
+    #: costs the record's latency — so the loop wakes for whichever partition
+    #: is ready first and lets the rest say "not yet" again.
+    defer_delay: float = 0.0
 
     @property
     def empty(self) -> bool:
         return self.polled == 0
+
+    @property
+    def wait(self) -> float:
+        """How long the loop should sleep before the next poll.
+
+        The shorter of the two waits when both are set, for the same reason
+        `defer_delay` is a minimum: overshooting costs latency and
+        undershooting costs one cheap poll.
+        """
+        waits = [delay for delay in (self.retry_delay, self.defer_delay) if delay > 0]
+        return min(waits) if waits else 0.0
 
 
 class ConsumerRunner:
@@ -191,6 +247,17 @@ class ConsumerRunner:
         return self._name
 
     @property
+    def source(self) -> MessageSource:
+        """The transport this runner owns.
+
+        Read-only, and exposed for the two callers that legitimately need it: a
+        factory's caller checking which topics and group a runner was assembled
+        with, and a test driving `consume_once` directly, which needs the
+        source started because `run` is what would otherwise have started it.
+        """
+        return self._source
+
+    @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
@@ -219,22 +286,33 @@ class ConsumerRunner:
         commits: dict[Partition, int] = {}
         delivered = 0
         failed = 0
+        deferred = 0
         retry_delay = 0.0
+        defer_delay = 0.0
 
         for partition, records in grouped.items():
             for record in records:
-                if await self._handle(record):
+                outcome, delay = await self._handle(record)
+                if outcome is _Outcome.DONE:
                     delivered += 1
                     commits[partition] = record.next_offset
                     self._failures.pop(partition, None)
                     continue
 
-                failed += 1
-                retry_delay = max(retry_delay, self._register_failure(record))
+                if outcome is _Outcome.DEFERRED:
+                    deferred += 1
+                    defer_delay = delay if defer_delay == 0 else min(defer_delay, delay)
+                else:
+                    failed += 1
+                    retry_delay = max(retry_delay, self._register_failure(record))
+
                 self._seek_back(record)
                 # The rest of this partition is behind a record that has not
                 # been dealt with. Handling it would be handling records out of
-                # order and would leave nowhere to commit.
+                # order and would leave nowhere to commit. For a deferred
+                # record this is not a compromise but the point: a retry tier
+                # is ordered by due time, so nothing behind a record that is
+                # not due yet is due either.
                 break
 
         await self._commit(commits)
@@ -244,6 +322,7 @@ class ConsumerRunner:
             polled=len(messages),
             delivered=delivered,
             failed=failed,
+            deferred=deferred,
             partitions=len(grouped),
         )
         return ConsumeResult(
@@ -251,10 +330,17 @@ class ConsumerRunner:
             delivered=delivered,
             failed=failed,
             retry_delay=retry_delay,
+            deferred=deferred,
+            defer_delay=defer_delay,
         )
 
-    async def _handle(self, message: ConsumedMessage) -> bool:
-        """Run the handler under its timeout. True if the record is done.
+    async def _handle(self, message: ConsumedMessage) -> tuple[_Outcome, float]:
+        """Run the handler under its timeout, and say what became of the record.
+
+        The second element is how long to wait, and it is meaningful only for
+        `DEFERRED` — a failure's wait comes from the partition's backoff, which
+        `_register_failure` owns because it depends on how many failures came
+        before this one.
 
         `Exception` and not `BaseException`: a cancelled runner must not record
         the message it was carrying as failed. Nothing about the record is
@@ -267,6 +353,21 @@ class ConsumerRunner:
             )
         except asyncio.CancelledError:
             raise
+        except RetryAfter as not_yet:
+            # Below `warning` deliberately: a record that is not due is the
+            # normal state of a retry tier, and logging it as a warning would
+            # bury the partition that is genuinely stuck among thousands that
+            # are merely waiting.
+            logger.debug(
+                "kafka.handler_deferred",
+                consumer=self._name,
+                partition=str(message.partition),
+                offset=message.offset,
+                key=message.key,
+                retry_in=round(not_yet.delay, 3),
+                reason=not_yet.reason,
+            )
+            return _Outcome.DEFERRED, not_yet.delay
         except TimeoutError:
             logger.warning(
                 "kafka.handler_timeout",
@@ -275,7 +376,7 @@ class ConsumerRunner:
                 offset=message.offset,
                 timeout=self._config.handler_timeout,
             )
-            return False
+            return _Outcome.FAILED, 0.0
         except Exception as exc:
             logger.warning(
                 "kafka.handler_failed",
@@ -285,8 +386,8 @@ class ConsumerRunner:
                 key=message.key,
                 error=f"{type(exc).__name__}: {exc}",
             )
-            return False
-        return True
+            return _Outcome.FAILED, 0.0
+        return _Outcome.DONE, 0.0
 
     def _register_failure(self, message: ConsumedMessage) -> float:
         """Count the failure and say how long to wait before trying again."""
@@ -412,8 +513,8 @@ class ConsumerRunner:
                 continue
 
             consecutive_failures = 0
-            if result.retry_delay > 0:
-                await self._sleep(result.retry_delay)
+            if result.wait > 0:
+                await self._sleep(result.wait)
 
     def start(self) -> None:
         """Run the loop in a background task. Idempotent while it is running.

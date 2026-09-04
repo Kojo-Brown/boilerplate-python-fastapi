@@ -116,6 +116,41 @@ class MessageNotDecodableError(MessagingError):
     error_code = "MESSAGE_NOT_DECODABLE"
 
 
+class RetryAfter(Exception):
+    """Raised by a handler that cannot process a record *yet*.
+
+    Not a `MessagingError` and deliberately not named `...Error`: nothing has
+    gone wrong. The record is fine, the handler is fine, and the only thing
+    missing is time — which is why `ConsumerRunner` treats it as neither a
+    success nor a failure. The partition stops at the record and is seeked back
+    to it, exactly as a failure would be, but no failure is counted, no
+    exponential backoff is started, and the wait is `delay` rather than a
+    guess.
+
+    That distinction matters for two reasons. `kafka.partition_stalled` is a
+    warning about a partition in trouble, and a retry-tier consumer waiting
+    fifteen minutes for a record that is not due is not in trouble — logging it
+    as such is how a real stall gets lost among the healthy ones. And the
+    runner's own backoff is full-jittered and capped at `retry_max_delay`, so a
+    handler that knows the record is due in nine hundred seconds would
+    otherwise be polled at a uniformly random interval up to sixty, several
+    hundred times, to be told no.
+
+    The retry ladder in `src/dlq` is the reason this exists, but it is not
+    specific to it: a handler backing off a downstream that answered `429` with
+    a `Retry-After` header has exactly the same thing to say.
+    """
+
+    def __init__(self, delay: float, *, reason: str | None = None) -> None:
+        if delay < 0:
+            raise ValueError("delay cannot be negative.")
+        self.delay = delay
+        self.reason = reason
+        super().__init__(
+            f"Not ready for {delay:.3f}s" + (f": {reason}" if reason else ".")
+        )
+
+
 class LifecycleError(MessagingError):
     """A publisher or source was used before `start()` or after `stop()`.
 
@@ -361,6 +396,7 @@ __all__ = [
     "Partition",
     "PublishError",
     "PublishedMessage",
+    "RetryAfter",
     "normalize_headers",
     "utc_now",
     "validate_record",
