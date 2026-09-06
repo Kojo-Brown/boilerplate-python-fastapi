@@ -101,6 +101,12 @@ SWALLOWED_CANCELLATION_EXEMPTIONS: Final[dict[str, str]] = {
         "which is what leaves the consumer group. Re-raising would cancel "
         "whoever is shutting the application down."
     ),
+    "src.redis_streams.consumer.StreamConsumerRunner.stop": (
+        "The same shape again: this method cancelled its own consume loop and "
+        "is awaiting the unwinding, which is what removes this consumer from "
+        "the group when it owes nothing. Re-raising would cancel whoever is "
+        "shutting the application down."
+    ),
     "src.distributed_lock.lock.DistributedLock._stop_renewer": (
         "Same shape: the renewal task was cancelled by this method, so the "
         "`CancelledError` is the acknowledgement rather than a request. A "

@@ -187,6 +187,20 @@ routing publish is what makes committing past a failed record safe, so a
 broker that refuses it stalls the partition instead: the one outcome this must
 not have is a record that exists nowhere.
 
+## Redis Streams
+[docs/redis-streams.md](./docs/redis-streams.md) — consumer groups over Redis
+Streams in `src/redis_streams`, with the stalled messages claimed back. A
+pending entries list acknowledges *messages* where a Kafka offset cannot, so a
+failed message is left unacknowledged and everything behind it carries on — and
+so nothing ever redelivers it on its own: a pending entry stays owned by a
+consumer that may no longer exist, with the group's lag reading zero
+throughout. Each cycle therefore claims before it reads, since new messages
+first would starve the stalled ones on a busy stream, and `min_idle` is a bet
+about your own handlers rather than about Redis. The delivery counter in the
+PEL is what a poison message is caught by. Four behaviours were measured rather
+than assumed, `XGROUP DELCONSUMER` destroying the pending entries it reports
+being the one that shapes shutdown.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
