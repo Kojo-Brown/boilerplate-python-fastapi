@@ -324,6 +324,46 @@ class Settings(BaseSettings):
     #: running, which is a loop whose lag reads as zero throughout.
     DLQ_MAX_REPLAYS: int = 3
 
+    # Redis Streams consumer groups (see src/redis_streams, docs/redis-streams.md).
+    #
+    # A different messaging system from the one above, not a second transport
+    # for it: a Redis Streams group acknowledges individual messages, where a
+    # Kafka group commits one offset per partition. That is why there is no
+    # retry ladder here — a failed message is simply left unacknowledged and
+    # reclaimed later, in place.
+    #
+    # MIN_IDLE_SECONDS is the only setting that can cause a bug on its own, and
+    # it is a bet about your own handlers rather than about Redis: it is how
+    # long a message must sit unacknowledged before another consumer may take
+    # it, so anything at or below HANDLER_TIMEOUT_SECONDS turns a slow handler
+    # into concurrent duplicate processing. Keep the gap wide.
+    #
+    # MAX_DELIVERIES counts attempts, not retries — the first read is delivery
+    # one — and is what stops a poison message circling the group forever: past
+    # the cap it is copied to <stream><DEAD_LETTER_SUFFIX> and acknowledged.
+    #
+    # MAXLEN caps the stream at publish time and defaults to 0, meaning
+    # unbounded. Setting it is a memory decision with a correctness edge:
+    # trimming does not consult any consumer group, so a cap low enough to
+    # overtake a slow consumer deletes messages it has not read.
+    REDIS_STREAMS_BACKEND: Literal["redis", "memory"] = "memory"
+    #: Falls back to REDIS_URL. Separate so a deployment can put streams on
+    #: their own instance — they are the one Redis workload here whose memory
+    #: grows with throughput rather than with the number of live keys.
+    REDIS_STREAMS_URL: str = ""
+    REDIS_STREAMS_CONSUMER_GROUP: str = "boilerplate-python-fastapi"
+    REDIS_STREAMS_BATCH_SIZE: int = 50
+    REDIS_STREAMS_BLOCK_TIMEOUT_SECONDS: float = 2.0
+    REDIS_STREAMS_MIN_IDLE_SECONDS: float = 60.0
+    REDIS_STREAMS_CLAIM_BATCH: int = 20
+    REDIS_STREAMS_MAX_DELIVERIES: int = 5
+    REDIS_STREAMS_HANDLER_TIMEOUT_SECONDS: float = 30.0
+    REDIS_STREAMS_RETRY_BASE_DELAY_SECONDS: float = 1.0
+    REDIS_STREAMS_RETRY_MAX_DELAY_SECONDS: float = 60.0
+    REDIS_STREAMS_SHUTDOWN_TIMEOUT_SECONDS: float = 10.0
+    REDIS_STREAMS_DEAD_LETTER_SUFFIX: str = ".dead"
+    REDIS_STREAMS_MAXLEN: int = 0
+
     # Google OAuth 2.0
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
