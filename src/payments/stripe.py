@@ -37,6 +37,7 @@ from src.payments.base import (
     Refund,
     RefundStatus,
 )
+from src.resilience import resilient_async_client
 
 logger = structlog.get_logger(__name__)
 
@@ -101,9 +102,16 @@ class StripeGateway:
         Built lazily rather than in `__init__` because constructing an
         `AsyncClient` outside a running loop binds it to the wrong one, and the
         registry builds gateways wherever it happens to be called.
+
+        A client this gateway builds gets the retry and circuit-breaker policy
+        from `src/resilience`; one injected for a test does not, so the wire
+        assertions below stay one request to one handler. Every charge already
+        carries an `Idempotency-Key` derived from `ChargeRequest.reference`,
+        which is exactly the header that makes retrying a `POST` safe — see
+        `docs/resilience.md`.
         """
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
+            self._client = resilient_async_client(timeout=self._timeout)
         return self._client
 
     async def aclose(self) -> None:

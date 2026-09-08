@@ -201,6 +201,19 @@ PEL is what a poison message is caught by. Four behaviours were measured rather
 than assumed, `XGROUP DELCONSUMER` destroying the pending entries it reports
 being the one that shapes shutdown.
 
+## Outbound resilience
+[docs/resilience.md](./docs/resilience.md) — retry with full jitter and a
+per-origin circuit breaker for outbound HTTP, in `src/resilience`, applied as an
+`httpx` transport so nothing has to opt in. A transient failure wants a retry
+and a sustained one wants the calls to stop, because every retry against a dead
+dependency holds a connection a healthy dependency now cannot have. One
+predicate decides both retryability and breaker-failure, so the two cannot
+disagree: 429 and 5xx count, 4xx and `PoolTimeout` do not. A connect failure
+proves the request never arrived and so may repeat any method; everything else
+may repeat only an idempotent one, or a `POST` carrying an idempotency key.
+`CircuitOpenError` is an `httpx.TransportError` so that every caller already
+handling "could not reach it" keeps working.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
