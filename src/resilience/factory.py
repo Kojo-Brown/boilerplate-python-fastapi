@@ -16,8 +16,9 @@ import httpx
 
 from src.decorators.base import DEFAULT_RNG, AsyncSleeper
 from src.resilience.base import DEFAULT_WALL_CLOCK, RetryPolicy, WallClock
+from src.resilience.bulkhead import BulkheadRegistry
 from src.resilience.circuit import CircuitBreakerRegistry
-from src.resilience.transport import ResilientTransport
+from src.resilience.transport import BulkheadTransport, ResilientTransport
 
 #: httpx's own default, restated so that passing `timeout=None` to the factory
 #: means "no timeout" — the httpx meaning — instead of "use the default".
@@ -29,14 +30,20 @@ def resilient_transport(
     transport: httpx.AsyncBaseTransport | None = None,
     retry: RetryPolicy | None = None,
     breakers: CircuitBreakerRegistry | None = None,
+    bulkheads: BulkheadRegistry | None = None,
     sleep: AsyncSleeper = asyncio.sleep,
     rng: random.Random = DEFAULT_RNG,
     wall_clock: WallClock = DEFAULT_WALL_CLOCK,
 ) -> ResilientTransport:
-    """Wrap `transport` — or a fresh `AsyncHTTPTransport` — with the policy."""
+    """Wrap `transport` — or a fresh `AsyncHTTPTransport` — with the policy.
+
+    The stack, outermost first, is retry → breaker → bulkhead → `transport`.
+    Both orderings are deliberate and both are explained in the module
+    docstring of `transport.py`.
+    """
     inner = transport if transport is not None else httpx.AsyncHTTPTransport()
     return ResilientTransport(
-        inner,
+        BulkheadTransport(inner, bulkheads=bulkheads),
         retry=retry,
         breakers=breakers,
         sleep=sleep,
@@ -54,6 +61,7 @@ def resilient_async_client(
     transport: httpx.AsyncBaseTransport | None = None,
     retry: RetryPolicy | None = None,
     breakers: CircuitBreakerRegistry | None = None,
+    bulkheads: BulkheadRegistry | None = None,
     sleep: AsyncSleeper = asyncio.sleep,
     rng: random.Random = DEFAULT_RNG,
     wall_clock: WallClock = DEFAULT_WALL_CLOCK,
@@ -63,7 +71,10 @@ def resilient_async_client(
     `timeout` is per *attempt*, which is the only thing a transport-level
     timeout can be, so a policy of three attempts can spend three times it. An
     enclosing `deadline()` is what bounds the whole thing — see the module
-    docstring of `transport.py`.
+    docstring of `transport.py`. Setting it to `None` disables httpx's phase
+    timeouts but not the bulkhead's hard one, which is the point of having
+    both: `BulkheadConfig.execution_timeout` cannot be reset by a far end that
+    keeps making just enough progress.
 
     Args:
         base_url: Prefix for relative request URLs, as on `httpx.AsyncClient`.
@@ -75,6 +86,10 @@ def resilient_async_client(
         retry: Retry policy. Defaults to three attempts with full jitter.
         breakers: Breaker registry. Defaults to the process-wide one, so two
             clients built for the same dependency share its state.
+        bulkheads: Compartment registry. Defaults to the process-wide one, for
+            the sharper version of the same reason: two clients for one
+            dependency have two connection pools, so without a shared registry
+            they would be entitled to twice the concurrency the limit names.
         sleep: Awaitable sleep between attempts.
         rng: Jitter source.
         wall_clock: Now, in epoch seconds, for a `Retry-After` HTTP-date.
@@ -93,6 +108,7 @@ def resilient_async_client(
             transport=transport,
             retry=retry,
             breakers=breakers,
+            bulkheads=bulkheads,
             sleep=sleep,
             rng=rng,
             wall_clock=wall_clock,

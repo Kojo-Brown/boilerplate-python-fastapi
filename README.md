@@ -214,6 +214,20 @@ may repeat only an idempotent one, or a `POST` carrying an idempotency key.
 `CircuitOpenError` is an `httpx.TransportError` so that every caller already
 handling "could not reach it" keeps working.
 
+## Bulkheads
+[docs/bulkheads.md](./docs/bulkheads.md) — a compartment per dependency in
+`src/resilience/bulkhead.py`, bounding how many calls to one origin are in
+flight and how long any of them may hold a slot. The breaker limits a
+dependency that has *failed*; this limits one that is merely slow, which raises
+nothing, logs nothing and is the more common way a third party takes an
+application down. The queue in front of a full compartment is bounded, because
+a wait queue with no ceiling turns a concurrency limit into a memory limit, and
+the slot is handed to the waiter at the head rather than released for whoever
+wakes first. It sits inside the retry loop so no slot is held across a backoff,
+and behind the breaker so an open circuit is answered without queueing for one.
+`BulkheadFullError` is a `TransportError` but deliberately not a
+`TimeoutException`: the dependency was never asked.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

@@ -89,6 +89,22 @@ class CircuitState(StrEnum):
     HALF_OPEN = "half_open"
 
 
+class BulkheadRejection(StrEnum):
+    """Why a compartment refused a call. All three are local shortages.
+
+    Distinguished because they call for different fixes and are otherwise
+    indistinguishable in a log: `QUEUE_FULL` says the dependency is saturated
+    and the backlog is already as deep as it is allowed to get, `ACQUIRE_TIMEOUT`
+    says this call queued and its turn did not come, and `NO_BUDGET` says the
+    enclosing request deadline had less time left than the wait would take, so
+    nothing was queued at all.
+    """
+
+    QUEUE_FULL = "queue_full"
+    ACQUIRE_TIMEOUT = "acquire_timeout"
+    NO_BUDGET = "no_budget"
+
+
 class CircuitOpenError(httpx.TransportError):
     """The breaker refused to attempt the request.
 
@@ -115,6 +131,136 @@ class CircuitOpenError(httpx.TransportError):
         )
         self.origin = origin
         self.retry_after = retry_after
+
+
+class BulkheadFullError(httpx.TransportError):
+    """The compartment for this dependency had no room and no time to wait.
+
+    An `httpx.TransportError` for exactly the reason `CircuitOpenError` is one:
+    every existing caller of an outbound client here already answers "the
+    dependency could not be reached" by catching that base class, and a new
+    exception family would escape all of them and surface as an unhandled 500
+    at the moment the bulkhead is supposed to be helping.
+
+    It is *not* an `httpx.TimeoutException` even when the reason is
+    `ACQUIRE_TIMEOUT`, and that distinction is load-bearing rather than
+    pedantic. A `TimeoutException` from this transport means the dependency did
+    not answer in time; this means the dependency was never asked, because this
+    process is already spending as much of itself on that dependency as it is
+    allowed to. Reporting the second as the first sends whoever reads the log
+    to the wrong system entirely — and, more concretely, `request_was_sent`
+    would classify it as possibly-delivered and refuse to repeat a `POST` that
+    provably never left.
+
+    `retry_after` is a hint a caller can put in a `Retry-After` header of its
+    own, and is the compartment's acquire timeout: a slot is a matter of one
+    call finishing, not of a dependency recovering, so it is short.
+    """
+
+    def __init__(
+        self,
+        origin: str,
+        reason: BulkheadRejection,
+        *,
+        limit: int,
+        queued: int,
+        waited: float,
+        retry_after: float,
+    ) -> None:
+        super().__init__(
+            f"Bulkhead for '{origin}' refused the request ({reason}): "
+            f"{limit} in flight, {queued} queued, waited {waited:.3f}s."
+        )
+        self.origin = origin
+        self.reason = reason
+        self.limit = limit
+        self.queued = queued
+        self.waited = waited
+        self.retry_after = retry_after
+
+
+class BulkheadTimeoutError(httpx.TimeoutException):
+    """One attempt held a compartment slot past its hard timeout.
+
+    A `TimeoutException` — unlike `BulkheadFullError` — because it means what
+    every other timeout in httpx means: the request went out and no answer came
+    back in the time allowed. So it counts against the breaker, and it is
+    retryable on the same terms as a read timeout.
+
+    It exists at all because **httpx's own timeouts are per phase and each one
+    resets whenever progress is made**. `Timeout(read=10.0)` bounds the wait
+    for the next read, not the exchange: a far end that dribbles a header line
+    every nine seconds never trips it and holds a connection, a slot and a task
+    for as long as it cares to. And a client built with `timeout=None` — which
+    the factory permits, because httpx does — has no phase timeout at all, so
+    this is the only thing standing between one hung dependency and a
+    compartment that never empties.
+
+    It bounds the request through to the response *headers*, which is the span
+    `handle_async_request` owns. The body is read afterwards and is not covered
+    — see `docs/bulkheads.md`, which is also why the slot stays held until the
+    body is closed rather than until the send returns.
+    """
+
+    def __init__(self, origin: str, seconds: float) -> None:
+        super().__init__(
+            f"Request to '{origin}' held a bulkhead slot for longer than "
+            f"the {seconds:g}s hard timeout."
+        )
+        self.origin = origin
+        self.seconds = seconds
+
+
+@dataclass(frozen=True, slots=True)
+class BulkheadConfig:
+    """How much of this process one dependency may occupy.
+
+    Args:
+        limit: Calls to one origin allowed in flight at once. This is the
+            compartment. Deliberately below `httpx.Limits().max_connections`
+            (100) by default, so that the *bulkhead* is what sheds rather than
+            the connection pool: shedding here is per dependency, immediate,
+            and carries a typed error naming the origin, where pool exhaustion
+            is process-wide, costs the full pool timeout first, and arrives as
+            a `PoolTimeout` that says nothing about which dependency filled it.
+        max_queue: Calls allowed to wait for a slot. Bounded because a wait
+            queue with no bound is a memory limit wearing a timeout's clothes —
+            every waiter is a task, a request object and whatever the handler
+            above it is still holding. Past this, callers are refused
+            immediately rather than admitted to a backlog that cannot drain in
+            `acquire_timeout` anyway.
+        acquire_timeout: The longest a call waits for a slot. Short on purpose:
+            queueing *is* the pile-up a bulkhead exists to prevent, so this is
+            the small amount of it that smooths a burst, not a way to make the
+            limit soft. An enclosing `deadline()` shortens it further.
+        execution_timeout: Hard ceiling on one attempt, through to the response
+            headers, or `None` to rely on httpx's phase timeouts alone. Not a
+            duplicate of the client's `timeout`: that one bounds each phase and
+            restarts whenever a byte arrives, and it is absent entirely from a
+            client built with `timeout=None`. Without a ceiling that cannot be
+            reset, a handful of hung calls hold slots for the life of the
+            process and the limit stops being a limit.
+
+    Raises:
+        ValueError: The policy is unusable — checked at construction so a bad
+            compartment fails at startup rather than during the incident it was
+            configured for.
+    """
+
+    limit: int = 20
+    max_queue: int = 40
+    acquire_timeout: float = 1.0
+    execution_timeout: float | None = 30.0
+
+    def __post_init__(self) -> None:
+        if self.limit < 1:
+            raise ValueError("limit must be at least 1.")
+        if self.max_queue < 0:
+            raise ValueError("max_queue must not be negative.")
+        if self.acquire_timeout < 0:
+            raise ValueError("acquire_timeout must not be negative.")
+        if self.execution_timeout is not None and self.execution_timeout <= 0:
+            raise ValueError("execution_timeout must be positive, or None.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,10 +402,35 @@ def is_pool_exhaustion(exc: BaseException) -> bool:
     Counting it towards a trip opens a circuit on a remote service because of a
     local shortage, and retrying it queues another waiter on the pool that is
     already full. So it is neither a breaker failure nor retryable, and the
-    caller gets it immediately — see `docs/resilience.md`; bounding concurrency
-    per dependency is what fixes it, and that is a bulkhead, not this.
+    caller gets it immediately — see `docs/resilience.md`.
+
+    Kept as its own predicate now that `is_local_shortage` exists, because the
+    two answer different questions: this one is "was it the pool", which is
+    what a log line and a metric want to distinguish, and that one is "was it
+    ours", which is what the transport acts on.
     """
     return isinstance(exc, httpx.PoolTimeout)
+
+
+def is_local_shortage(exc: BaseException) -> bool:
+    """Whether `exc` is this process running out of its own capacity.
+
+    The two members are one fact discovered at two different depths.
+    `PoolTimeout` is the connection pool full; `BulkheadFullError` is the
+    compartment for a single dependency full, which is the same shortage caught
+    earlier, attributed to the dependency that caused it, and answered in
+    bounded time rather than after a full pool timeout.
+
+    Both get identical treatment from the transport, and the treatment is the
+    interesting part: **neither counts towards the breaker and neither is
+    retried.** Counting them opens a circuit on a remote service because of a
+    local shortage — the dependency may be in perfect health and merely
+    popular — and retrying them adds another waiter to the queue that is
+    already the problem. The caller gets the error immediately, which is the
+    honest answer and the only one that stops the pile-up rather than joining
+    it. See `docs/bulkheads.md`.
+    """
+    return isinstance(exc, httpx.PoolTimeout | BulkheadFullError)
 
 
 def request_was_sent(exc: httpx.TransportError) -> bool:

@@ -20,13 +20,14 @@ handles the first. The circuit breaker exists to notice that this is no longer
 the first, and to stop.
 
 ```
-             ┌──────────────── ResilientTransport ───────────────┐
- client  ──▶ │  breaker.acquire() ─▶ send ─▶ classify ─▶ retry?  │ ──▶ network
-             └──────────────────────────────────────────────────┘
-                       │                          │
-                  refuses when            full-jitter backoff,
-                  the circuit is           or `Retry-After`
-                  open for this origin
+             ┌──────────────── ResilientTransport ────────────────────┐
+ client  ──▶ │  breaker.acquire() ─▶ bulkhead ─▶ send ─▶ classify ─▶ retry?  │ ──▶ network
+             └───────────────────────────────────────────────────────┘
+                       │              │                  │
+                  refuses when   bounds how many    full-jitter backoff,
+                  the circuit is  are in flight      or `Retry-After`
+                  open for        to this origin
+                  this origin     (docs/bulkheads.md)
 ```
 
 ## Using it
@@ -76,6 +77,8 @@ retrying is not evidence of an outage either.
 | 501, 505 | **no** | Permanent protocol answers. They will say the same thing in ten minutes. |
 | `ConnectError`, `ReadTimeout`, `WriteError`, `RemoteProtocolError`… | yes | The dependency could not be reached or could not finish. |
 | `PoolTimeout` | **no** | *This process* ran out of connections. The far end may be in perfect health; counting it opens a circuit on a remote service because of a local shortage, and retrying it queues another waiter on a pool that is already full. |
+| `BulkheadFullError` | **no** | The same shortage caught earlier and attributed to a dependency: this process is already spending as much of itself on that origin as it is allowed to. Never asked, so never the far end's fault. See `docs/bulkheads.md`. |
+| `BulkheadTimeoutError` | yes, if idempotent | The attempt held a compartment slot past its hard ceiling. Unlike the above, this *is* the dependency failing to answer, so it counts and it is retried on the same terms as a read timeout. |
 
 ## What may be retried
 
@@ -209,12 +212,14 @@ where nothing may pass and nothing will ever report.
   of every outbound call — which is a network call to decide whether to make a
   network call — and a shared breaker one replica can open for all of them.
   `CircuitBreakerRegistry` is the seam if that trade is ever worth making.
-* **Nothing bounds concurrency per dependency.** The breaker limits calls once
-  a dependency has *failed*; it does nothing about a dependency that is merely
-  slow, which will still fill the connection pool with waiters. That is a
-  bulkhead, and it is the next item in `SPEC.md`. `PoolTimeout` is deliberately
-  left un-retried and uncounted here so it stays visible as the local
-  exhaustion it is.
+* **Concurrency per dependency is bounded next door, not here.** The breaker
+  limits calls once a dependency has *failed*; it does nothing about one that
+  is merely slow. That is `src/resilience/bulkhead.py`, documented in
+  `docs/bulkheads.md`, and every client this factory builds already has one.
+  `PoolTimeout` is still un-retried and uncounted here, now alongside
+  `BulkheadFullError` and under the same predicate — `is_local_shortage` — for
+  the same reason: both are this process out of capacity, and neither says
+  anything about the dependency's health.
 * **No metrics.** `CircuitBreakerRegistry.states()` is a snapshot suitable for
   a health endpoint, and the transport logs `http.retry_scheduled`,
   `http.retry_exhausted`, `http.retry_declined` and the breaker logs
