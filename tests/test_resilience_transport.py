@@ -16,10 +16,19 @@ from collections.abc import AsyncIterator, Callable
 import httpx
 import pytest
 
-from src.resilience.base import CircuitBreakerConfig, CircuitOpenError, RetryPolicy
+from src.resilience.base import (
+    BulkheadConfig,
+    BulkheadFullError,
+    BulkheadTimeoutError,
+    CircuitBreakerConfig,
+    CircuitOpenError,
+    CircuitState,
+    RetryPolicy,
+)
+from src.resilience.bulkhead import DEFAULT_BULKHEADS, BulkheadRegistry
 from src.resilience.circuit import CircuitBreakerRegistry
 from src.resilience.factory import resilient_async_client, resilient_transport
-from src.resilience.transport import ResilientTransport
+from src.resilience.transport import BulkheadTransport, ResilientTransport
 from src.structured.deadline import deadline
 from src.structured.errors import DeadlineExceeded
 
@@ -623,3 +632,329 @@ async def test_the_transport_closes_what_it_wraps() -> None:
 
     await ResilientTransport(Closing(), breakers=CircuitBreakerRegistry()).aclose()
     assert closed == [True]
+
+
+# ---- the bulkhead, and how it composes -------------------------------------
+
+
+class Hanging(httpx.AsyncBaseTransport):
+    """A dependency that accepts the request and never answers."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")  # pragma: no cover
+
+
+def stack(
+    inner: httpx.AsyncBaseTransport,
+    *,
+    bulkheads: BulkheadRegistry,
+    retry: RetryPolicy | None = None,
+    breakers: CircuitBreakerRegistry | None = None,
+    sleep: RecordingSleeper | None = None,
+) -> ResilientTransport:
+    """The whole stack: retry → breaker → bulkhead → `inner`."""
+    return ResilientTransport(
+        BulkheadTransport(inner, bulkheads=bulkheads),
+        retry=retry if retry is not None else RetryPolicy(attempts=1),
+        breakers=breakers if breakers is not None else CircuitBreakerRegistry(),
+        sleep=sleep if sleep is not None else RecordingSleeper(),
+        rng=random.Random(0),
+    )
+
+
+def compartments(**kwargs: object) -> BulkheadRegistry:
+    return BulkheadRegistry(config=BulkheadConfig(**kwargs))  # type: ignore[arg-type]
+
+
+async def test_a_request_takes_a_slot_and_gives_it_back() -> None:
+    bulkheads = compartments(limit=2, execution_timeout=None)
+    await send(
+        stack(httpx.MockTransport(Responder(httpx.Response(200))), bulkheads=bulkheads)
+    )
+
+    assert bulkheads.stats()["https://api.test"].in_flight == 0
+
+
+async def test_the_slot_outlives_the_send_and_is_freed_on_close() -> None:
+    """A slot released at the headers stops counting a call while it is still
+    occupying the process — the one thing a compartment has to count correctly.
+    httpx reads the body *after* the transport returns, so releasing on return
+    would let a dependency that answers headers instantly and then drips ten
+    megabytes consume no capacity at all.
+
+    `_StreamingTransport` rather than `httpx.MockTransport`, because
+    `Response.__init__` reads a `ByteStream` eagerly and every mocked response
+    therefore arrives already closed, with the question never asked.
+    """
+    closed: list[str] = []
+    bulkheads = compartments(limit=1, execution_timeout=None)
+    bulkhead = bulkheads.get("https://api.test")
+    transport = stack(_StreamingTransport(closed, 200), bulkheads=bulkheads)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        async with client.stream("GET", URL) as response:
+            assert bulkhead.in_flight == 1  # still held, body unread
+            assert await response.aread() == b"body"
+
+    assert bulkhead.in_flight == 0
+    assert closed == ["200#1"]
+
+
+async def test_a_buffered_response_gives_its_slot_back_immediately() -> None:
+    bulkheads = compartments(limit=1, execution_timeout=None)
+    bulkhead = bulkheads.get("https://api.test")
+
+    response = await send(
+        stack(httpx.MockTransport(Responder(httpx.Response(200))), bulkheads=bulkheads)
+    )
+
+    assert response.is_closed
+    assert bulkhead.in_flight == 0
+
+
+async def test_the_slot_is_given_back_between_attempts_not_held_across_them() -> None:
+    """A slot held across the backoff is capacity spent doing nothing.
+
+    With one slot and a retry, holding it across the sleep would deadlock the
+    second attempt against the first — so that both attempts happen at all is
+    the assertion.
+    """
+    responder = Responder(httpx.Response(503), httpx.Response(200))
+    bulkheads = compartments(limit=1, max_queue=0, execution_timeout=None)
+
+    response = await send(
+        stack(
+            httpx.MockTransport(responder),
+            bulkheads=bulkheads,
+            retry=RetryPolicy(attempts=2, jitter=False),
+        )
+    )
+
+    assert response.status_code == 200
+    assert responder.calls == 2
+
+
+async def test_a_full_compartment_refuses_without_retrying_or_blaming_the_far_end() -> (
+    None
+):
+    breakers = CircuitBreakerRegistry(
+        config=CircuitBreakerConfig(failure_threshold=1, window_size=2)
+    )
+    bulkheads = compartments(limit=1, max_queue=0, execution_timeout=None)
+    responder = Responder(httpx.Response(200))
+    transport = stack(
+        httpx.MockTransport(responder),
+        bulkheads=bulkheads,
+        breakers=breakers,
+        retry=RetryPolicy(attempts=3, jitter=False),
+    )
+
+    # Occupy the single slot for the duration of the call under test.
+    held = await bulkheads.get("https://api.test").acquire()
+    with pytest.raises(BulkheadFullError):
+        await send(transport)
+
+    assert responder.calls == 0  # never attempted
+    assert breakers.get("https://api.test").failures_in_window == 0
+    assert breakers.get("https://api.test").state is CircuitState.CLOSED
+    held.release()
+
+
+async def test_an_open_circuit_is_answered_without_touching_the_compartment() -> None:
+    """The free test runs first: `acquire` on a breaker never waits, and
+    `acquire` on a compartment can. Reversed, every call to a dependency that
+    is already known to be down would queue for a slot to be told so.
+    """
+    breakers = CircuitBreakerRegistry(
+        config=CircuitBreakerConfig(failure_threshold=1, window_size=2)
+    )
+    bulkheads = compartments(limit=1, max_queue=0, execution_timeout=None)
+    transport = stack(
+        httpx.MockTransport(Responder(httpx.Response(503))),
+        bulkheads=bulkheads,
+        breakers=breakers,
+        retry=RetryPolicy(attempts=1),
+    )
+
+    await send(transport)  # trips the breaker
+    bulkhead = bulkheads.get("https://api.test")
+    assert bulkhead.in_flight == 0
+
+    with pytest.raises(CircuitOpenError):
+        await send(transport)
+
+    assert bulkhead.in_flight == 0
+    assert bulkhead.rejected == 0
+
+
+async def test_one_dependency_filling_its_compartment_does_not_touch_another() -> None:
+    """The whole point of the metaphor: a breach floods one compartment."""
+    bulkheads = compartments(limit=1, max_queue=0, execution_timeout=None)
+    transport = stack(
+        httpx.MockTransport(Responder(httpx.Response(200))), bulkheads=bulkheads
+    )
+
+    held = await bulkheads.get("https://slow.test").acquire()
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(BulkheadFullError):
+            await client.get("https://slow.test/x")
+        assert (await client.get("https://healthy.test/x")).status_code == 200
+    held.release()
+
+
+# ---- the hard timeout ------------------------------------------------------
+
+
+async def test_a_call_that_never_answers_is_cut_off_and_its_slot_returned() -> None:
+    inner = Hanging()
+    bulkheads = compartments(limit=1, execution_timeout=0.01)
+    transport = stack(inner, bulkheads=bulkheads, retry=RetryPolicy(attempts=1))
+
+    with pytest.raises(BulkheadTimeoutError) as caught:
+        await send(transport)
+
+    assert caught.value.origin == "https://api.test"
+    assert caught.value.seconds == 0.01
+    assert bulkheads.get("https://api.test").in_flight == 0
+
+
+async def test_the_hard_timeout_counts_against_the_breaker_and_is_retried() -> None:
+    """Unlike a refusal, this one *is* the dependency failing to answer."""
+    inner = Hanging()
+    breakers = CircuitBreakerRegistry(
+        config=CircuitBreakerConfig(failure_threshold=2, window_size=4)
+    )
+    bulkheads = compartments(limit=1, execution_timeout=0.01)
+    transport = stack(
+        inner,
+        bulkheads=bulkheads,
+        breakers=breakers,
+        retry=RetryPolicy(attempts=2, jitter=False),
+    )
+
+    with pytest.raises(BulkheadTimeoutError):
+        await send(transport)
+
+    assert inner.calls == 2
+    assert breakers.get("https://api.test").state is CircuitState.OPEN
+
+
+async def test_the_hard_timeout_does_not_repeat_a_post() -> None:
+    """The request went out, so whether it took effect is unknowable."""
+    inner = Hanging()
+    bulkheads = compartments(limit=1, execution_timeout=0.01)
+    transport = stack(
+        inner, bulkheads=bulkheads, retry=RetryPolicy(attempts=3, jitter=False)
+    )
+
+    with pytest.raises(BulkheadTimeoutError):
+        await send(transport, "POST", content=b"{}")
+
+    assert inner.calls == 1
+
+
+async def test_an_enclosing_deadline_is_not_reported_as_the_hard_timeout() -> None:
+    """`timer.expired()` is what tells the two apart, as in `deadline()`.
+
+    Renaming the request budget expiring into "the dependency was slow" sends
+    whoever reads it to the wrong system, and the two have different fixes.
+    """
+    inner = Hanging()
+    bulkheads = compartments(limit=1, execution_timeout=30.0)
+    transport = stack(inner, bulkheads=bulkheads, retry=RetryPolicy(attempts=1))
+
+    with pytest.raises(DeadlineExceeded):
+        async with deadline(0.01, name="request"):
+            await send(transport)
+
+    assert bulkheads.get("https://api.test").in_flight == 0
+
+
+async def test_the_hard_timeout_can_be_switched_off() -> None:
+    responder = Responder(httpx.Response(200))
+    bulkheads = compartments(limit=1, execution_timeout=None)
+
+    assert (
+        await send(stack(httpx.MockTransport(responder), bulkheads=bulkheads))
+    ).status_code == 200
+
+
+# ---- wiring ----------------------------------------------------------------
+
+
+async def test_the_factory_builds_the_whole_stack() -> None:
+    responder = Responder(httpx.Response(503), httpx.Response(200))
+    bulkheads = compartments(limit=1, max_queue=0, execution_timeout=None)
+
+    client = resilient_async_client(
+        base_url="https://api.test",
+        transport=httpx.MockTransport(responder),
+        retry=RetryPolicy(attempts=2, jitter=False),
+        breakers=CircuitBreakerRegistry(),
+        bulkheads=bulkheads,
+        sleep=RecordingSleeper(),
+    )
+    async with client:
+        assert (await client.get("/v1/things")).status_code == 200
+
+    assert bulkheads.stats()["https://api.test"].in_flight == 0
+
+
+async def test_the_registry_is_reachable_for_a_health_check_too() -> None:
+    bulkheads = BulkheadRegistry()
+    transport = BulkheadTransport(httpx.MockTransport(Responder(httpx.Response(200))))
+    assert transport.bulkheads is DEFAULT_BULKHEADS
+    assert BulkheadTransport(transport, bulkheads=bulkheads).bulkheads is bulkheads
+
+
+async def test_the_bulkhead_transport_closes_what_it_wraps() -> None:
+    closed: list[bool] = []
+
+    class Closing(httpx.AsyncBaseTransport):
+        async def handle_async_request(
+            self, request: httpx.Request
+        ) -> httpx.Response:  # pragma: no cover
+            return httpx.Response(200)
+
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    await BulkheadTransport(Closing(), bulkheads=BulkheadRegistry()).aclose()
+    assert closed == [True]
+
+
+async def test_the_bulkhead_transport_enters_and_exits_what_it_wraps() -> None:
+    inner = httpx.MockTransport(Responder(httpx.Response(200)))
+    async with BulkheadTransport(inner, bulkheads=BulkheadRegistry()) as transport:
+        assert isinstance(transport, BulkheadTransport)
+
+
+async def test_a_timeout_from_below_is_not_relabelled_as_the_hard_one() -> None:
+    """Only this scope expiring is this scope's to rename.
+
+    A `TimeoutError` raised by whatever is underneath — an `asyncio.wait_for`
+    inside somebody's transport, a resolver — is a different failure, and
+    reporting it as the bulkhead's would send a reader looking for a
+    compartment that is behaving perfectly. `timer.expired()` is what separates
+    them, and the answer here is no.
+    """
+
+    class RaisesTimeoutError(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            raise TimeoutError("from somewhere underneath")
+
+    bulkheads = compartments(limit=1, execution_timeout=30.0)
+    transport = stack(
+        RaisesTimeoutError(), bulkheads=bulkheads, retry=RetryPolicy(attempts=1)
+    )
+
+    with pytest.raises(TimeoutError) as caught:
+        await send(transport)
+
+    assert not isinstance(caught.value, BulkheadTimeoutError)
+    assert bulkheads.get("https://api.test").in_flight == 0

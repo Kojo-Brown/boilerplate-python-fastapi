@@ -33,6 +33,28 @@ retried: it is not a failure of the dependency, it is this process declining to
 find out, and repeating it would burn the caller's remaining attempts on a
 decision that cannot change inside a few hundred milliseconds.
 
+## Where the bulkhead sits
+
+`BulkheadTransport` is a second, thinner transport that `ResilientTransport`
+wraps *around* — so the layering, outermost first, is retry → breaker →
+bulkhead → network, and each is inside the one before it.
+
+That the bulkhead is inside the retry loop is the load-bearing half. A slot
+taken for the whole retry sequence is a slot held across the backoff sleeps,
+which is capacity spent on doing nothing at exactly the moment the dependency
+has none to spare. Per attempt, the sleep happens with the compartment given
+back — and a retry that arrives to find the compartment full is refused, which
+is correct rather than unfortunate: if the dependency is saturated, a retry is
+precisely the traffic worth shedding.
+
+That the breaker is outside the bulkhead is the other half, and it is the
+cheaper test first. `CircuitBreaker.acquire` never waits: it admits or raises
+in the same tick. `Bulkhead.acquire` can wait up to its acquire timeout. With
+the order reversed, every call to a dependency that is already known to be down
+would queue for a slot before being told the circuit is open — spending the
+compartment, and the caller's time, to reach a decision that was available for
+free.
+
 ## What is deliberately not here
 
 A total retry budget. Three attempts against a fifteen-second timeout is a
@@ -50,6 +72,7 @@ from __future__ import annotations
 import asyncio
 import random
 import types
+from collections.abc import AsyncIterator
 
 import httpx
 import structlog
@@ -57,20 +80,149 @@ import structlog
 from src.decorators.base import DEFAULT_RNG, AsyncSleeper, backoff_delay
 from src.resilience.base import (
     DEFAULT_WALL_CLOCK,
+    BulkheadTimeoutError,
     RetryPolicy,
     WallClock,
     is_failure_status,
-    is_pool_exhaustion,
+    is_local_shortage,
     is_replayable,
     may_repeat,
     origin_of,
     request_was_sent,
     retry_after_seconds,
 )
+from src.resilience.bulkhead import (
+    DEFAULT_BULKHEADS,
+    BulkheadRegistry,
+    BulkheadSlot,
+)
 from src.resilience.circuit import DEFAULT_REGISTRY, CircuitBreakerRegistry
 from src.structured.deadline import current_deadline
 
 logger = structlog.get_logger(__name__)
+
+
+class _SlotBoundStream(httpx.AsyncByteStream):
+    """A response body that gives its bulkhead slot back when it is closed.
+
+    The reason this exists at all is that `handle_async_request` returns as
+    soon as the response *headers* are in, and httpx reads the body afterwards
+    — inside `AsyncClient.send`, or later still if the caller asked for
+    `stream=True`. Releasing the slot on return would therefore stop counting a
+    call at the point it stops being interesting to the transport and long
+    before it stops occupying this process, which is the one thing a
+    compartment has to count correctly. A dependency that answers headers
+    instantly and then drips ten megabytes would consume no capacity at all.
+
+    So the slot outlives the send and is bound to the body: httpx closes a
+    response when it is fully read, when `aclose` is called, and when a
+    `stream=True` block exits, and all three arrive here.
+    """
+
+    __slots__ = ("_slot", "_stream")
+
+    def __init__(self, stream: httpx.AsyncByteStream, slot: BulkheadSlot) -> None:
+        self._stream = stream
+        self._slot = slot
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._stream:
+            yield chunk
+
+    async def aclose(self) -> None:
+        try:
+            await self._stream.aclose()
+        finally:
+            # In a `finally`, because a transport whose close fails would
+            # otherwise take a slot with it, one per failure, until the
+            # compartment is empty of everything but ghosts.
+            self._slot.release()
+
+
+class BulkheadTransport(httpx.AsyncBaseTransport):
+    """Bounds how many requests to one origin are in flight, and how long.
+
+    Wrapped *by* `ResilientTransport` rather than the other way round — see
+    "Where the bulkhead sits" in the module docstring for why that order is
+    the load-bearing part.
+
+    Args:
+        transport: What actually sends the request.
+        bulkheads: Registry of per-origin compartments. Defaults to the
+            process-wide `DEFAULT_BULKHEADS`, so every client built by the
+            factory shares one compartment per dependency; pass a fresh
+            registry to isolate a test.
+    """
+
+    def __init__(
+        self,
+        transport: httpx.AsyncBaseTransport,
+        *,
+        bulkheads: BulkheadRegistry | None = None,
+    ) -> None:
+        self._transport = transport
+        self._bulkheads = bulkheads if bulkheads is not None else DEFAULT_BULKHEADS
+
+    @property
+    def bulkheads(self) -> BulkheadRegistry:
+        """The registry, for a health check that wants to report compartments."""
+        return self._bulkheads
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        origin = origin_of(request)
+        bulkhead = self._bulkheads.get(origin)
+        hard_timeout = bulkhead.config.execution_timeout
+
+        slot = await bulkhead.acquire()
+        try:
+            if hard_timeout is None:
+                response = await self._transport.handle_async_request(request)
+            else:
+                timer = asyncio.timeout(hard_timeout)
+                try:
+                    async with timer:
+                        response = await self._transport.handle_async_request(request)
+                except TimeoutError as exc:
+                    # `asyncio.timeout` converts *its own* cancellation into
+                    # `TimeoutError`, and an enclosing `deadline()` that fires
+                    # here produces one too. Only the first is this scope
+                    # expiring, and renaming the second would report a spent
+                    # request budget as a slow dependency — two failures with
+                    # different fixes. `deadline()` draws the same line, in the
+                    # same way, for the same reason.
+                    if not timer.expired():
+                        raise
+                    raise BulkheadTimeoutError(origin, hard_timeout) from exc
+        except BaseException:
+            # Includes cancellation and the enclosing deadline. Nothing was
+            # returned, so nothing else will ever release this slot.
+            slot.release()
+            raise
+
+        stream = response.stream
+        if response.is_closed or not isinstance(stream, httpx.AsyncByteStream):
+            # Already fully in memory — every `httpx.MockTransport` response is,
+            # because `Response.__init__` reads a `ByteStream` eagerly — so
+            # there is no close left to hang the release on.
+            slot.release()
+        else:
+            response.stream = _SlotBoundStream(stream, slot)
+        return response
+
+    async def aclose(self) -> None:
+        await self._transport.aclose()
+
+    async def __aenter__(self) -> BulkheadTransport:
+        await self._transport.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_value: BaseException | None = None,
+        traceback: types.TracebackType | None = None,
+    ) -> None:
+        await self._transport.__aexit__(exc_type, exc_value, traceback)
 
 
 class ResilientTransport(httpx.AsyncBaseTransport):
@@ -135,7 +287,10 @@ class ResilientTransport(httpx.AsyncBaseTransport):
                 call.release()
                 raise
             except httpx.TransportError as exc:
-                if is_pool_exhaustion(exc):
+                if is_local_shortage(exc):
+                    # This process out of capacity, not the dependency out of
+                    # health. Released without an outcome and raised without a
+                    # retry — see `is_local_shortage`.
                     call.release()
                     raise
                 call.failed()
