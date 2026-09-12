@@ -27,6 +27,16 @@ dependencies = [
     "redis>=6.4.0",
     "boto3>=1.35.0",
     "aiokafka>=0.14.0",
+    # OpenTelemetry (see src/observability, docs/observability.md). The API and
+    # SDK are versioned separately from the instrumentation packages — 1.x for
+    # the former, 0.x beta for the latter, permanently — so the two lines below
+    # are pinned to the ranges that ship together rather than to one number.
+    "opentelemetry-api>=1.44.0",
+    "opentelemetry-sdk>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
 ]
 
 [build-system]

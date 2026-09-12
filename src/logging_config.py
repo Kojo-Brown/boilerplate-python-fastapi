@@ -3,6 +3,8 @@ import sys
 
 import structlog
 
+from src.observability.logs import structlog_processors
+
 
 def configure_logging(log_level: str = "INFO") -> None:
     level = logging.getLevelName(log_level.upper())
@@ -13,6 +15,12 @@ def configure_logging(log_level: str = "INFO") -> None:
         structlog.processors.StackInfoRenderer(),
         structlog.dev.set_exc_info,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
+        # Trace correlation, and the bridge into the OpenTelemetry logs
+        # pipeline. Both sit here — after the timestamp, before the renderer —
+        # and both are no-ops until something is recording, so the chain does
+        # not change shape when the SDK is switched on. See
+        # src/observability/logs.py.
+        *structlog_processors(),
     ]
 
     if log_level.upper() == "DEBUG":

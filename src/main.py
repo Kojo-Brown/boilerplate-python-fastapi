@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from src.config import settings
+from src.database import engine
 from src.distributed_lock.factory import get_lock_backend
 from src.events.bus import event_bus
 from src.events.subscribers import register_default_subscribers
@@ -26,6 +27,7 @@ from src.limiter import limiter
 from src.logging_config import configure_logging
 from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
 from src.middleware.request_id import RequestIDMiddleware
+from src.observability import configure_observability, shutdown_observability
 from src.outbox.factory import get_outbox_relay
 from src.parallel.factory import get_cpu_pool
 from src.sse.hub import event_stream_hub
@@ -93,6 +95,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # here is what makes SIGTERM an orderly drain instead of a truncation, and
     # it costs nothing when nothing is in flight.
     await get_cpu_pool().shutdown()
+    # Last of all, because everything above it can still log: the batch
+    # processors hold spans and log records in this process's memory, so what
+    # is not flushed here is lost, and the last few seconds before a shutdown
+    # are the ones somebody goes looking for. Bounded by
+    # OTEL_SHUTDOWN_TIMEOUT_SECONDS — telemetry must never be why a SIGTERM
+    # misses its grace period. Configured at import (see below), torn down
+    # here, because only one of the two has to happen before the first request.
+    shutdown_observability(observability, settings)
 
 
 app = FastAPI(
@@ -131,3 +141,17 @@ app.include_router(health_router)
 from src.api.v1.router import v1_router  # noqa: E402
 
 app.include_router(v1_router)
+
+# Telemetry, at import rather than in the lifespan, and the reason is a trap
+# worth naming: instrumenting a FastAPI app patches `build_middleware_stack`,
+# and Starlette builds that stack on the app's *first* ASGI call — which is the
+# lifespan message itself. An app instrumented from inside the lifespan
+# therefore serves every request through a stack that was assembled before the
+# middleware existed, produces no server spans at all, and reports no error
+# while doing it. Everything else here would have been happy in the lifespan.
+#
+# Nothing is built, imported or started while `OTEL_ENABLED` is false, which is
+# the default and what the test suite runs with, so importing this module still
+# has no side effect worth the name. The teardown is in the lifespan, where a
+# shutdown belongs.
+observability = configure_observability(settings, app=app, engine=engine)

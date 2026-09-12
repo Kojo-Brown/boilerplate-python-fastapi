@@ -411,5 +411,78 @@ class Settings(BaseSettings):
     # has to say so explicitly (https://api-m.paypal.com).
     PAYPAL_API_BASE_URL: str = "https://api-m.sandbox.paypal.com"
 
+    # OpenTelemetry (see src/observability/, docs/observability.md).
+    #
+    # The names below are the SDK's own environment variables wherever one
+    # exists, which is deliberate: `OTEL_SERVICE_NAME` and
+    # `OTEL_EXPORTER_OTLP_ENDPOINT` are read by every OpenTelemetry SDK in
+    # every language, and a deployment that sets them expects them to take
+    # effect. Reading them here and passing the values explicitly to the
+    # exporters — rather than letting the SDK read the environment behind our
+    # back — is what keeps `Settings` the single description of how this
+    # process is configured.
+    #
+    # Off by default. An SDK that is on with nothing to export to spends a
+    # thread, a queue and a failing HTTP request every schedule delay, which is
+    # a poor default for `pytest` and for a clone someone is reading.
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "boilerplate-python-fastapi"
+    OTEL_SERVICE_VERSION: str = "0.1.0"
+    # "otlp" talks to a collector, "console" prints to stdout for a local look
+    # at what would be sent, and "none" builds the providers with no exporter
+    # at all — which is what the in-process tests use, since a reader they
+    # attach themselves still sees every span.
+    OTEL_EXPORTER: Literal["otlp", "console", "none"] = "otlp"
+    # The *base* endpoint, per the OTLP specification: the signal path
+    # (`/v1/traces`, `/v1/metrics`, `/v1/logs`) is appended to it. 4318 is the
+    # HTTP/protobuf port; 4317 is gRPC and is not what this exporter speaks.
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"
+    # Comma-separated `key=value` pairs, as the specification defines them —
+    # this is where a hosted collector's API key goes, and it comes from the
+    # environment like every other credential here.
+    OTEL_EXPORTER_OTLP_HEADERS: str = ""
+    OTEL_EXPORTER_OTLP_TIMEOUT_SECONDS: float = 10.0
+    # Each signal can be turned off on its own. Traces and logs are cheap per
+    # request; metrics cost a periodic export whether or not anything moved.
+    OTEL_TRACES_ENABLED: bool = True
+    OTEL_METRICS_ENABLED: bool = True
+    OTEL_LOGS_ENABLED: bool = True
+    # Head sampling ratio for traces this process *starts*. A sampling decision
+    # arriving in a `traceparent` is always honoured instead — see
+    # `src/observability/tracing.py` — so lowering this does not punch holes in
+    # traces that began upstream.
+    OTEL_TRACES_SAMPLER_RATIO: float = 1.0
+    OTEL_METRIC_EXPORT_INTERVAL_SECONDS: float = 60.0
+    # How long the batch processors wait before sending a non-full batch, and
+    # how many spans or records they will hold while the collector is
+    # unreachable. The queue is bounded because the alternative to dropping
+    # telemetry under sustained export failure is dropping the process.
+    OTEL_BATCH_SCHEDULE_DELAY_SECONDS: float = 5.0
+    OTEL_BATCH_MAX_QUEUE_SIZE: int = 2048
+    # Ceiling on the flush at shutdown. Telemetry must never be the reason a
+    # SIGTERM misses its grace period, so what has not left by then is dropped.
+    OTEL_SHUTDOWN_TIMEOUT_SECONDS: float = 5.0
+    # Paths that produce no server span. A liveness probe every second is the
+    # highest-rate endpoint most services have and the least interesting, and
+    # it would otherwise dominate both the trace sample and the export bill.
+    # Matched as regular expressions against the path, per
+    # `opentelemetry-util-http`.
+    OTEL_EXCLUDED_URLS: str = "health,health/ready"
+    # Database and outbound-HTTP spans. Both are per-call rather than
+    # per-request, so they are the two that most change the volume.
+    OTEL_INSTRUMENT_SQLALCHEMY: bool = True
+    OTEL_INSTRUMENT_HTTPX: bool = True
+    # Which HTTP attribute names the instrumentation emits: "http" for the
+    # stable semantic conventions (`http.request.method`,
+    # `http.response.status_code`), "http/dup" for both those and the
+    # superseded ones during a dashboard migration, "" for the old ones alone.
+    # Stable is the default here because this is a new codebase and the old
+    # names have been deprecated since semconv 1.23; "http/dup" is the setting
+    # for a deployment whose existing dashboards still query the old names.
+    # This one is exported into the process environment by
+    # `configure_observability` — the instrumentation libraries read it from
+    # there and offer no other way to say it.
+    OTEL_SEMCONV_STABILITY_OPT_IN: str = "http"
+
 
 settings: Final[Settings] = Settings()
