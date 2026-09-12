@@ -228,6 +228,20 @@ and behind the breaker so an open circuit is answered without queueing for one.
 `BulkheadFullError` is a `TransportError` but deliberately not a
 `TimeoutException`: the dependency was never asked.
 
+## Observability
+[docs/observability.md](./docs/observability.md) — OpenTelemetry traces,
+metrics and logs in `src/observability/`, off unless `OTEL_ENABLED`. A server
+span per request parented by the inbound `traceparent`, a client span per
+outbound *attempt* (the instrumentation sits under the retry transport, so a
+retried call reads as one), a span per statement, and every log line stamped
+with the trace it happened in — that last one unconditionally, because
+correlation that depends on a setting is correlation nobody trusts. Sampling is
+`ParentBased`, so a decision that arrived in a header is honoured and lowering
+the local ratio never punches a hole in somebody else's trace. W3C propagation
+is automatic over HTTP in both directions; for message headers, which are
+`(name, bytes)` pairs and keep their duplicates,
+`inject_trace_context`/`extract_trace_context` are explicit at the call site.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
