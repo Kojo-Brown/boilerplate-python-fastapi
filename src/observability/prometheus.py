@@ -154,12 +154,22 @@ metrics_exposition: Final[MetricsExposition] = MetricsExposition()
 
 
 def _authorize(request: Request, token: str) -> None:
-    """Refuse the scrape unless it presents `token` as a bearer credential."""
+    """Refuse the scrape unless it presents `token` as a bearer credential.
+
+    The comparison is on bytes rather than on `str`, and not only for
+    tidiness: `secrets.compare_digest` raises `TypeError` when either `str`
+    holds a non-ASCII character, so comparing the header directly would turn
+    `Authorization: Bearer ünicode` into an unhandled exception and a 500 on an
+    endpoint that anything can reach. Encoding both sides makes that a plain
+    401, which is what a wrong credential is.
+    """
     if not token:
         return
     header = request.headers.get("Authorization", "")
     scheme, _, presented = header.partition(" ")
-    if scheme.lower() != "bearer" or not secrets.compare_digest(presented, token):
+    if scheme.lower() != "bearer" or not secrets.compare_digest(
+        presented.encode("utf-8"), token.encode("utf-8")
+    ):
         logger.warning("metrics.scrape_unauthorized", client=request.client)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

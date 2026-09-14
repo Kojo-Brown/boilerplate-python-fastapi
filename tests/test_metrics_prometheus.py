@@ -330,6 +330,28 @@ class TestTheScrapeToken:
         response = guarded.get("/metrics", headers={"Authorization": header})
         assert response.status_code == 401
 
+    @pytest.mark.parametrize(
+        "credential",
+        [b"\xc3\xbcnicode", SCRAPE_TOKEN.encode() + b"\xc3\xbc"],
+    )
+    def test_a_non_ascii_credential_is_refused_rather_than_crashing(
+        self, guarded: TestClient, credential: bytes
+    ) -> None:
+        """401, not 500.
+
+        `secrets.compare_digest` raises `TypeError` when either `str` holds a
+        non-ASCII character, so comparing the header value directly would turn
+        a malformed credential into an unhandled exception — a 500, and a
+        stack trace in the logs, on an endpoint anything that can reach the
+        service can reach. The header is sent as bytes here because the HTTP
+        client refuses to encode a non-ASCII `str` one, which is exactly why
+        this case cannot be covered by the parametrisation above.
+        """
+        response = guarded.get(
+            "/metrics", headers={"Authorization": b"Bearer " + credential}
+        )
+        assert response.status_code == 401
+
     def test_the_scheme_is_matched_case_insensitively(
         self, guarded: TestClient
     ) -> None:
