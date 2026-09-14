@@ -35,6 +35,7 @@ from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from prometheus_client import CollectorRegistry
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from src.config import Settings
@@ -49,6 +50,7 @@ from src.observability.instrumentation import (
 )
 from src.observability.logs import build_logger_provider, log_forwarder
 from src.observability.metrics import build_meter_provider
+from src.observability.prometheus import build_scrape_registry, metrics_exposition
 from src.observability.propagation import configure_propagation
 from src.observability.resource import build_resource
 from src.observability.tracing import build_tracer_provider
@@ -72,6 +74,9 @@ class Observability:
     tracer_provider: TracerProvider | None = None
     meter_provider: MeterProvider | None = None
     logger_provider: LoggerProvider | None = None
+    #: The registry `/metrics` renders, when a Prometheus reader was attached.
+    #: Held so a test can scrape it without reaching into the endpoint.
+    scrape_registry: CollectorRegistry | None = None
     #: Held so shutdown can remove the ASGI middleware from the same app.
     app: FastAPI | None = None
     httpx_instrumented: bool = False
@@ -130,8 +135,17 @@ def configure_observability(
         if settings.OTEL_TRACES_ENABLED
         else None
     )
+    # Built before the provider because the provider needs the registry, and
+    # the endpoint needs the same object: one registry, one reader, one set of
+    # numbers. `None` when scraping is off, which makes `/metrics` answer 503
+    # rather than serve an empty exposition Prometheus would read as healthy.
+    scrape_registry = (
+        build_scrape_registry()
+        if settings.OTEL_METRICS_ENABLED and settings.PROMETHEUS_ENABLED
+        else None
+    )
     meter_provider = (
-        build_meter_provider(settings, resource)
+        build_meter_provider(settings, resource, scrape_registry=scrape_registry)
         if settings.OTEL_METRICS_ENABLED
         else None
     )
@@ -151,6 +165,14 @@ def configure_observability(
 
     if logger_provider is not None:
         log_forwarder.bind(logger_provider.get_logger(INSTRUMENTATION_NAME))
+
+    # Bound whether or not the providers were installed globally, for the same
+    # reason the forwarder is: the endpoint has no other way to reach the
+    # registry, and `install_globally=False` exists so a test can drive the
+    # real wiring rather than a paraphrase of it. `shutdown_observability`
+    # undoes this.
+    if scrape_registry is not None:
+        metrics_exposition.bind(scrape_registry)
 
     if app is not None:
         instrument_fastapi(
@@ -173,12 +195,14 @@ def configure_observability(
         traces=tracer_provider is not None,
         metrics=meter_provider is not None,
         logs=logger_provider is not None,
+        scrape=scrape_registry is not None,
         sampler_ratio=settings.OTEL_TRACES_SAMPLER_RATIO,
     )
     return Observability(
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
+        scrape_registry=scrape_registry,
         app=app,
         httpx_instrumented=httpx_instrumented,
         sqlalchemy_instrumented=sqlalchemy_instrumented,
@@ -214,6 +238,10 @@ def shutdown_observability(
         uninstrument_sqlalchemy()
 
     log_forwarder.unbind()
+    # Before the meter provider is shut down: a scrape that lands in between
+    # would otherwise collect from a reader whose provider has stopped, and get
+    # an exposition that is empty rather than a 503 saying so.
+    metrics_exposition.unbind()
 
     if handle.tracer_provider is not None:
         handle.tracer_provider.force_flush(timeout_millis)

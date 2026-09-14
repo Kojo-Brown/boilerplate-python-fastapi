@@ -102,10 +102,12 @@ different tenth of it.
 - **SQL** — one span per statement, from the engine passed to
   `configure_observability`.
 
-`/health` and `/health/ready` produce no spans (`OTEL_EXCLUDED_URLS`). A
-liveness probe every second is the highest-rate endpoint most services have and
-says nothing about a user's request; leaving it in skews every latency
-aggregate towards an endpoint that does no work.
+`/health`, `/health/ready` and `/metrics` produce no spans and no metrics
+(`OTEL_EXCLUDED_URLS`). A liveness probe every second is the highest-rate
+endpoint most services have and says nothing about a user's request; leaving it
+in skews every latency aggregate towards an endpoint that does no work. The
+scrape endpoint is excluded for the same reason plus one more — it would be
+measuring the monitoring.
 
 The ASGI instrumentation's per-message `receive`/`send` child spans are
 switched off, and not by a setting: this API streams exports and serves SSE,
@@ -120,10 +122,19 @@ the requests is not a tenth as accurate, it is wrong. The knob is
 interval, whatever the traffic) and the resolution (a burst shorter than the
 interval shows up in the totals and not in the shape).
 
-What is emitted today is what the instrumentation libraries emit — HTTP server
-and client duration histograms. Application metrics and a Prometheus scrape
-endpoint are the next item in `SPEC.md`; `build_meter_provider` is the provider
-they will hang off.
+What is emitted is what the instrumentation libraries emit — HTTP server and
+client duration histograms — reshaped by the RED views in
+`src/observability/red.py`, which decide which attributes survive and where the
+latency bucket boundaries are.
+
+A `MeterProvider` carries more than one reader, so the periodic push above and
+the Prometheus scrape endpoint read the same instruments: recording happens
+once whichever way the numbers leave the process. That also makes
+`OTEL_EXPORTER=none` plus `PROMETHEUS_ENABLED=true` a real deployment rather
+than a disabled one — collected in-process, pulled out, no collector anywhere.
+
+[docs/metrics.md](./metrics.md) covers the scrape endpoint, the cardinality
+rules, and the Grafana dashboard in `dashboards/grafana/red.json`.
 
 ## Logs
 
@@ -258,10 +269,13 @@ closes each provider. Both halves matter:
 | `OTEL_BATCH_SCHEDULE_DELAY_SECONDS` | `5.0` | |
 | `OTEL_BATCH_MAX_QUEUE_SIZE` | `2048` | Bounded: sustained export failure drops telemetry rather than the process. |
 | `OTEL_SHUTDOWN_TIMEOUT_SECONDS` | `5.0` | Per signal. |
-| `OTEL_EXCLUDED_URLS` | `health,health/ready` | Regular expressions against the path. |
+| `OTEL_EXCLUDED_URLS` | `health,health/ready,metrics` | Regular expressions against the path. |
 | `OTEL_INSTRUMENT_SQLALCHEMY` | `true` | |
 | `OTEL_INSTRUMENT_HTTPX` | `true` | |
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | `http` | Stable HTTP attribute names. `http/dup` emits both during a dashboard migration. |
+| `PROMETHEUS_ENABLED` | `true` | Attach the scrape reader. See [docs/metrics.md](./metrics.md). |
+| `PROMETHEUS_METRICS_PATH` | `/metrics` | |
+| `PROMETHEUS_SCRAPE_TOKEN` | — | Empty means unauthenticated. |
 
 `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT` and
 `OTEL_EXPORTER_OTLP_HEADERS` are the SDK's own environment variables, read here
@@ -296,7 +310,6 @@ For a process that is not the API — a Celery worker, a dedicated outbox relay
 ## What is deliberately not here
 
 - **No collector in `docker-compose.yml`**, for the reason above.
-- **No Prometheus endpoint and no RED metrics.** The next `SPEC.md` item.
 - **No span links.** Which is what a redelivered message probably wants; see
   [Not wired: the publishers](#not-wired-the-publishers).
 - **No tail sampling.** Head sampling is a per-process decision; keeping "all
