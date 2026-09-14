@@ -37,6 +37,14 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.65b0",
     "opentelemetry-instrumentation-httpx>=0.65b0",
     "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
+    # The Prometheus pull reader (src/observability/prometheus.py). Versioned
+    # with the instrumentation packages rather than with the SDK — 0.x beta —
+    # which is why it is pinned to the same range as the three above rather
+    # than to the 1.x one. It brings `prometheus_client` with it, and that one
+    # is imported directly here (the registry, `generate_latest`, the process
+    # collectors), so it is named below for the same reason `redis` is.
+    "opentelemetry-exporter-prometheus>=0.65b0",
+    "prometheus-client>=0.23.0",
 ]
 
 [build-system]

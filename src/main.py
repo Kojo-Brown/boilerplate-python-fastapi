@@ -27,7 +27,11 @@ from src.limiter import limiter
 from src.logging_config import configure_logging
 from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
 from src.middleware.request_id import RequestIDMiddleware
-from src.observability import configure_observability, shutdown_observability
+from src.observability import (
+    build_metrics_router,
+    configure_observability,
+    shutdown_observability,
+)
 from src.outbox.factory import get_outbox_relay
 from src.parallel.factory import get_cpu_pool
 from src.sse.hub import event_stream_hub
@@ -137,6 +141,14 @@ app.add_middleware(RequestIDMiddleware)
 
 
 app.include_router(health_router)
+# Alongside the probes rather than under `/api/v1/`: a scrape endpoint is
+# infrastructure, not part of the versioned API, and nothing generating a
+# client from the OpenAPI document should find it. It serves 503 until
+# `configure_observability` below binds a registry to it, which is what a
+# scraper should see when there is nothing to collect. The route itself is
+# registered unconditionally so that a deployment which turns metrics on later
+# does not need a different image.
+app.include_router(build_metrics_router(settings))
 
 from src.api.v1.router import v1_router  # noqa: E402
 

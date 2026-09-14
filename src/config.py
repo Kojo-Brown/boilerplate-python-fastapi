@@ -466,8 +466,11 @@ class Settings(BaseSettings):
     # highest-rate endpoint most services have and the least interesting, and
     # it would otherwise dominate both the trace sample and the export bill.
     # Matched as regular expressions against the path, per
-    # `opentelemetry-util-http`.
-    OTEL_EXCLUDED_URLS: str = "health,health/ready"
+    # `opentelemetry-util-http`. `metrics` is here for a second reason: a
+    # scrape endpoint that appears in its own RED metrics measures the
+    # monitoring rather than the service, and at one scrape every 15 seconds it
+    # would be among the highest-rate routes on the dashboard.
+    OTEL_EXCLUDED_URLS: str = "health,health/ready,metrics"
     # Database and outbound-HTTP spans. Both are per-call rather than
     # per-request, so they are the two that most change the volume.
     OTEL_INSTRUMENT_SQLALCHEMY: bool = True
@@ -483,6 +486,27 @@ class Settings(BaseSettings):
     # `configure_observability` — the instrumentation libraries read it from
     # there and offer no other way to say it.
     OTEL_SEMCONV_STABILITY_OPT_IN: str = "http"
+
+    # Prometheus scrape endpoint (see src/observability/prometheus.py,
+    # docs/metrics.md).
+    #
+    # On by default, unlike the rest of telemetry, because a pull reader costs
+    # nothing until someone scrapes it — there is no thread, no queue and no
+    # outbound connection. It still produces nothing unless `OTEL_ENABLED` and
+    # `OTEL_METRICS_ENABLED` are both true, since it reads instruments off the
+    # `MeterProvider` and there is no provider otherwise; `/metrics` answers
+    # 503 in that case rather than an empty 200 that Prometheus would read as a
+    # healthy target with no traffic.
+    #
+    # `OTEL_ENABLED=true` with `OTEL_EXPORTER=none` and this on is the
+    # scrape-only deployment: collected in-process, pulled out, no collector.
+    PROMETHEUS_ENABLED: bool = True
+    PROMETHEUS_METRICS_PATH: str = "/metrics"
+    # Empty means unauthenticated, which is right when `/metrics` is only
+    # reachable from inside the cluster — the usual case. Set it and the
+    # endpoint requires `Authorization: Bearer <token>`, compared in constant
+    # time. Comes from the environment like every other credential here.
+    PROMETHEUS_SCRAPE_TOKEN: str = ""
 
 
 settings: Final[Settings] = Settings()

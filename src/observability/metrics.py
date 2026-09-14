@@ -15,11 +15,17 @@ metrics can be turned off on their own.
 these series: a burst shorter than the interval is visible in the totals and
 invisible in the shape.
 
-What is emitted is, for now, what the instrumentation libraries emit —
+What is emitted is what the instrumentation libraries emit —
 `http.server.request.duration` from the ASGI instrumentation, the client
-equivalent from httpx. Hand-rolled application metrics (a RED dashboard, a
-Prometheus scrape endpoint) are the next item in SPEC.md and deliberately not
-here: this module is the provider they will hang off.
+equivalent from httpx — reshaped into the RED contract by the views in
+`src/observability/red.py`, which is where the reasoning about attributes and
+bucket boundaries lives.
+
+A provider can carry more than one reader, and this one does when a scrape
+registry is passed: the periodic push above and the pull reader in
+`src/observability/prometheus.py` read the same instruments, so recording
+happens once whichever way the numbers leave the process. That is also why
+`OTEL_EXPORTER=none` is not the same as "metrics off" — see `build_meter_provider`.
 """
 
 from __future__ import annotations
@@ -32,9 +38,12 @@ from opentelemetry.sdk.metrics.export import (
     PeriodicExportingMetricReader,
 )
 from opentelemetry.sdk.resources import Resource
+from prometheus_client import CollectorRegistry
 
 from src.config import Settings
 from src.observability.exporters import parse_otlp_headers, signal_endpoint
+from src.observability.prometheus import build_prometheus_reader
+from src.observability.red import red_views
 
 
 def build_metric_exporter(settings: Settings) -> MetricExporter | None:
@@ -55,13 +64,33 @@ def build_metric_exporter(settings: Settings) -> MetricExporter | None:
     )
 
 
-def build_meter_provider(settings: Settings, resource: Resource) -> MeterProvider:
-    """A provider with a periodic reader, or with no reader under "none".
+def build_meter_provider(
+    settings: Settings,
+    resource: Resource,
+    *,
+    scrape_registry: CollectorRegistry | None = None,
+) -> MeterProvider:
+    """A provider with a periodic reader, a pull reader, both, or neither.
 
     A provider with no readers is not inert the way a `TracerProvider` with no
     processors is — instruments still aggregate in memory, bounded by their
     cardinality — so "none" here means "collected and never sent", which is
-    what a test wants when it attaches an `InMemoryMetricReader` of its own.
+    what a test wants when it attaches an `InMemoryMetricReader` of its own,
+    and what a scrape-only deployment wants when it passes a `scrape_registry`:
+    `OTEL_EXPORTER=none` with `PROMETHEUS_ENABLED=true` collects everything and
+    pushes nothing, waiting to be pulled.
+
+    Args:
+        settings: Configuration; decides the push exporter and the interval.
+        resource: The service identity every series carries. It reaches a
+            Prometheus scrape as the `target_info` metric rather than as labels.
+        scrape_registry: When given, a `PrometheusMetricReader` is attached to
+            it. The caller owns the registry because the endpoint that renders
+            it needs the same object — see `src/observability/prometheus.py`.
+
+    Returns:
+        A provider carrying the RED views, so the attribute sets and bucket
+        boundaries are identical on both paths out.
     """
     exporter = build_metric_exporter(settings)
     readers: list[MetricReader] = []
@@ -74,7 +103,9 @@ def build_meter_provider(settings: Settings, resource: Resource) -> MeterProvide
                 ),
             )
         )
-    return MeterProvider(resource=resource, metric_readers=readers)
+    if scrape_registry is not None:
+        readers.append(build_prometheus_reader(scrape_registry))
+    return MeterProvider(resource=resource, metric_readers=readers, views=red_views())
 
 
 __all__ = ["build_meter_provider", "build_metric_exporter"]

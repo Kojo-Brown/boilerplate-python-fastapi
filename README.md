@@ -242,6 +242,23 @@ is automatic over HTTP in both directions; for message headers, which are
 `(name, bytes)` pairs and keep their duplicates,
 `inject_trace_context`/`extract_trace_context` are explicit at the call site.
 
+## Metrics
+[docs/metrics.md](./docs/metrics.md) — RED at `GET /metrics` in the Prometheus
+exposition format, and the Grafana dashboard that reads it in
+`dashboards/grafana/red.json`. There is no hand-rolled middleware: a histogram
+carries its own count, so the one the ASGI instrumentation already records *is*
+rate, errors and duration, and a second instrument measuring the same requests
+would only be two numbers that disagree. What this repository adds is the part
+the instrumentation does not decide — SDK views that drop the labels which never
+vary and pin the latency bucket boundaries, because `histogram_quantile`
+interpolates inside a bucket and a dashboard checked into a repository needs a
+contract that a contrib upgrade cannot move under it. The scrape reader hangs
+off the same `MeterProvider` as the OTLP exporter, so `OTEL_EXPORTER=none` with
+`PROMETHEUS_ENABLED=true` is a complete deployment rather than a disabled one.
+`tests/test_metrics_dashboard.py` parses every query in the dashboard and checks
+it against a live scrape, so a renamed metric fails a test instead of quietly
+producing a panel that reads "No data".
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

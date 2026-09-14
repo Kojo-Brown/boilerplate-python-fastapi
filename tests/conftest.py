@@ -17,6 +17,14 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 # server. The Redis store itself is covered directly, against a real server,
 # in `test_idempotency_contract.py` and `test_idempotency_redis.py`.
 os.environ.setdefault("IDEMPOTENCY_BACKEND", "memory")
+# Which HTTP attribute names the OpenTelemetry instrumentations emit. Set here
+# rather than left to `apply_semconv_stability`, which only runs when
+# `OTEL_ENABLED` is true and therefore never during a default test run: the
+# instrumentation libraries read this variable once, at the first `instrument()`
+# call anywhere in the process, and cache the answer for good. Without it the
+# mode would be decided by whichever test happened to instrument first, and the
+# metric names asserted in `test_metrics_*.py` would depend on test order.
+os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
 
 import pytest
 from httpx import ASGITransport, AsyncClient

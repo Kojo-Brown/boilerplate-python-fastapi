@@ -28,6 +28,11 @@ off on its own. The one exception is `add_trace_correlation`, which is in the
 logging chain unconditionally and costs a context read — see
 `src/observability/logs.py` for why that is not a setting.
 
+Metrics leave this process two ways, and both read the same instruments off the
+same provider: the OTLP push above, and a Prometheus scrape at `/metrics`. See
+`src/observability/red.py` for the contract the second one exposes and
+`docs/metrics.md` for the dashboard built on it.
+
 See `docs/observability.md` for the collector side and for what is deliberately
 not here.
 """
@@ -49,12 +54,20 @@ from src.observability.logs import (
     structlog_processors,
 )
 from src.observability.metrics import build_meter_provider
+from src.observability.prometheus import (
+    MetricsExposition,
+    build_metrics_router,
+    build_prometheus_reader,
+    build_scrape_registry,
+    metrics_exposition,
+)
 from src.observability.propagation import (
     MessageHeaders,
     configure_propagation,
     extract_trace_context,
     inject_trace_context,
 )
+from src.observability.red import RED_DURATION_BUCKETS, red_views
 from src.observability.resource import build_resource
 from src.observability.setup import (
     Observability,
@@ -64,14 +77,19 @@ from src.observability.setup import (
 from src.observability.tracing import build_tracer_provider
 
 __all__ = [
+    "RED_DURATION_BUCKETS",
     "LogForwarder",
     "MessageHeaders",
+    "MetricsExposition",
     "Observability",
     "add_trace_correlation",
     "apply_semconv_stability",
     "build_logger_provider",
     "build_meter_provider",
+    "build_metrics_router",
+    "build_prometheus_reader",
     "build_resource",
+    "build_scrape_registry",
     "build_tracer_provider",
     "configure_observability",
     "configure_propagation",
@@ -81,6 +99,8 @@ __all__ = [
     "instrument_httpx",
     "instrument_sqlalchemy",
     "log_forwarder",
+    "metrics_exposition",
+    "red_views",
     "shutdown_observability",
     "structlog_processors",
     "uninstrument_fastapi",
