@@ -169,7 +169,14 @@ def _wait_for_liveness(
 
 
 def _assert_ready(process: subprocess.Popen[str], base_url: str) -> None:
-    """Require the readiness probe to confirm a live database round-trip."""
+    """Require the readiness probe to confirm a live round-trip to every dependency.
+
+    The probe reports one entry per dependency this configuration actually has
+    (`src/health/wiring.py`), so this asserts on the shape rather than on a
+    fixed body: every check must have passed, and `database` must be among them
+    — a regression that stopped probing Postgres altogether would otherwise
+    produce a cheerful `ready` with nothing behind it.
+    """
     try:
         # Generous next to the 5s default: a readiness check that has to wait out
         # a TCP connect to a wedged database is slow, but its answer is still the
@@ -185,14 +192,39 @@ def _assert_ready(process: subprocess.Popen[str], base_url: str) -> None:
     if result.status_code != 200:
         raise SmokeTestError(
             f"/health/ready answered HTTP {result.status_code}: {result.body!r}\n"
-            "The app started but could not reach Postgres — check DATABASE_URL "
-            "and that migrations ran.\n"
+            "The app started but could not reach a required dependency — the "
+            "failing check is named in the body above.\n"
             f"--- server output ---\n{_drain(process)}"
         )
 
-    if result.body != {"status": "ready", "database": "ok"}:
+    body = result.body
+    if not isinstance(body, dict):
+        raise SmokeTestError(f"/health/ready answered with a non-object: {body!r}")
+
+    checks = body.get("checks")
+    if body.get("status") != "ready" or not isinstance(checks, dict):
         raise SmokeTestError(
-            f"/health/ready answered 200 with an unexpected body: {result.body!r}"
+            f"/health/ready answered 200 with an unexpected body: {body!r}"
+        )
+
+    if "database" not in checks:
+        raise SmokeTestError(
+            "/health/ready reported ready without probing the database at all: "
+            f"{sorted(checks)}"
+        )
+
+    failed = sorted(
+        name
+        for name, report in checks.items()
+        if not isinstance(report, dict) or report.get("status") != "ok"
+    )
+    if failed:
+        # Reachable on a `degraded` 200: an optional dependency is down, which
+        # is a correct answer from the probe and still a broken environment for
+        # a build gate that provisions every service it configures.
+        raise SmokeTestError(
+            f"/health/ready is serving traffic with failed checks: {failed}\n"
+            f"body: {body!r}"
         )
 
 
@@ -226,7 +258,7 @@ def run_smoke_test(port: int, timeout: float, poll_interval: float) -> None:
         print(f"✓ app started and /health answered on {base_url}")
 
         _assert_ready(process, base_url)
-        print("✓ /health/ready confirmed a SELECT 1 round-trip to Postgres")
+        print("✓ /health/ready round-tripped every configured dependency")
 
         _assert_clean_shutdown(process)
         print("✓ app shut down cleanly on SIGTERM")

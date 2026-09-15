@@ -487,6 +487,35 @@ class Settings(BaseSettings):
     # there and offer no other way to say it.
     OTEL_SEMCONV_STABILITY_OPT_IN: str = "http"
 
+    # Health probes (see src/health/, docs/health.md).
+    #
+    # Both numbers are chosen against an orchestrator's probe settings rather
+    # than in the abstract, and the manifest in docs/health.md is the other
+    # half of each.
+    #
+    # CHECK_TIMEOUT_SECONDS bounds one dependency probe, and since the checks
+    # run concurrently it very nearly bounds the endpoint. It has to sit under
+    # the probe's own `timeoutSeconds` — Kubernetes defaults that to 1, which
+    # is *below* this value, so a deployment keeping the default there will
+    # record a probe failure before this timeout can produce the 503 that says
+    # which dependency is down. Raise `timeoutSeconds` to 3 rather than
+    # lowering this to 1: a dependency answering in 1.2s is degraded, not
+    # unreachable, and a one-second ceiling calls it dead.
+    #
+    # It is also handed to the probe's Redis client as its socket timeout, so
+    # the driver enforces the same bound when the event loop is too busy for
+    # `asyncio.timeout` to fire promptly.
+    #
+    # CACHE_TTL_SECONDS is how long one set of results is served to every
+    # caller. Probe traffic is otherwise multiplied by the number of probers —
+    # kubelet, load balancer, service mesh, replica count — against a single
+    # database, and it peaks precisely when that database is already in
+    # trouble. Keep it below the shortest `periodSeconds` polling this process
+    # and every poll still sees a fresh answer; 0 disables caching and is the
+    # setting for a test that wants to observe every probe.
+    HEALTH_CHECK_TIMEOUT_SECONDS: float = 2.0
+    HEALTH_CACHE_TTL_SECONDS: float = 1.0
+
     # Prometheus scrape endpoint (see src/observability/prometheus.py,
     # docs/metrics.md).
     #

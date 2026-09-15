@@ -32,25 +32,41 @@ uv run fastapi dev src/main.py  # http://localhost:8000/docs
 
 ## Health probes
 
-| Endpoint | Purpose | Touches Postgres |
-|----------|---------|------------------|
+| Endpoint | Purpose | Touches dependencies |
+|----------|---------|----------------------|
 | `GET /health` | Liveness — is the process alive? | No |
-| `GET /health/ready` | Readiness — can it serve traffic? | Yes (`SELECT 1`) |
+| `GET /health/ready` | Readiness — can it serve traffic? | Yes, every one this configuration has |
 
 They are deliberately separate. Point a `livenessProbe` at `/health` and a
 `readinessProbe` at `/health/ready`: if liveness queried the database, a brief
 Postgres outage would restart every healthy replica instead of just draining
-them. `/health/ready` returns `503` with
-`{"status": "unavailable", "database": "unreachable"}` while the database is
-down, and recovers on its own once it returns.
+them.
+
+Readiness round-trips each dependency concurrently — `SELECT 1` to Postgres,
+`PING` to Redis — and reports them one by one:
+
+```jsonc
+{ "status": "ready", "checks": { "database": { "status": "ok", ... }, "redis": { ... } } }
+```
+
+Each check is `required` or `optional`, and which one it is comes from your
+configuration rather than from the backend's identity: with
+`IDEMPOTENCY_FAIL_OPEN=true` an unreachable idempotency store is a `degraded`
+200, because those requests are still served, just without deduplication; with
+it false the same outage is a `503`, because they are refused. Only a failed
+`required` check stops traffic — alert on the body, route on the status code.
+
+[docs/health.md](./docs/health.md) has the manifests, the timeout and caching
+settings, what each `error` means, and how to add a check.
 
 ## Start-up smoke test
 
 `uv run python scripts/smoke_start.py`
 
 Boots the real `uvicorn src.main:app` process, waits for `/health`, requires
-`/health/ready` to confirm a live `SELECT 1` against the configured Postgres,
-then checks that SIGTERM shuts it down cleanly. CI runs this on every PR against
+`/health/ready` to round-trip every configured dependency — and to have probed
+the database at all, so a regression that drops the check cannot pass — then
+checks that SIGTERM shuts it down cleanly. CI runs this on every PR against
 a Postgres service container, so a change that imports fine but cannot actually
 start — a broken lifespan, a bad `DATABASE_URL`, an unmigrated schema — fails the
 build instead of the deploy.
@@ -258,6 +274,22 @@ off the same `MeterProvider` as the OTLP exporter, so `OTEL_EXPORTER=none` with
 `tests/test_metrics_dashboard.py` parses every query in the dashboard and checks
 it against a live scrape, so a renamed metric fails a test instead of quietly
 producing a panel that reads "No data".
+
+## Health probes
+[docs/health.md](./docs/health.md) — `GET /health` and `GET /health/ready` in
+`src/health/`, the second one round-tripping every dependency this configuration
+actually has. Checks run concurrently under a per-check timeout, and one run's
+results are cached for a TTL and shared by concurrent callers — probe load is
+otherwise multiplied by the kubelet, every load balancer and the replica count,
+against one Postgres, and it peaks exactly when that Postgres is already
+struggling. Criticality is read off the configuration rather than hard-coded:
+`IDEMPOTENCY_FAIL_OPEN` alone decides whether an unreachable store is a 503 or a
+`degraded` 200, and `degraded` is a 200 because a load balancer must only be
+told to stop sending traffic a process genuinely cannot serve. Subsystems
+sharing one Redis are probed once, not once each; a `memory` backend is not
+probed at all; failures are reported as an exception type name, never a driver
+message, because the endpoint is unauthenticated and asyncpg and redis-py both
+quote the DSN.
 
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,

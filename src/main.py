@@ -20,6 +20,7 @@ from src.exception_handlers import (
     validation_exception_handler,
 )
 from src.exceptions import AppException
+from src.health import get_health_registry
 from src.health import router as health_router
 from src.idempotency.factory import get_idempotency_store
 from src.kafka.factory import get_message_publisher
@@ -94,6 +95,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # asked for one yet costs nothing: redis-py connects lazily, so an unused
     # backend closes a pool that never opened a socket.
     await get_lock_backend().close()
+    # And the same again for the readiness checks, which probe Redis on a
+    # client of their own rather than borrowing either of the two above — see
+    # src/health/checks.py for why. A process that was never probed closes
+    # nothing, because the client is built on the first probe.
+    await get_health_registry().aclose()
     # Last, and waiting: the pool owns child processes rather than sockets, and
     # a child killed mid-call leaves a half-written result nobody reads. Waiting
     # here is what makes SIGTERM an orderly drain instead of a truncation, and
