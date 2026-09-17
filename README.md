@@ -291,6 +291,22 @@ probed at all; failures are reported as an exception type name, never a driver
 message, because the endpoint is unauthenticated and asyncpg and redis-py both
 quote the DSN.
 
+## N+1 queries
+[docs/n-plus-one.md](./docs/n-plus-one.md) — when to reach for `selectinload`,
+`joinedload` or `contains_eager`, and a detector in `tests/querycount.py` that
+makes the choice checkable. An N+1 is not "a lot of queries" but a query count
+that grows with the rows already fetched, so the tests run each block at two row
+counts and compare rather than asserting a literal number. Two signals are
+recorded, because neither catches the other's bug: lazy relationship loads,
+which name the attribute to fix, and one SQL shape sent N times, which is the
+hand-written loop that no loader option can help with. On the ordinary `await`
+path a lazy load raises `MissingGreenlet` rather than quietly querying — but
+`run_sync` and `awaitable_attrs` hand the N+1 straight back, which is why the
+gate exists in a codebase that has them. Nothing in `src/` traverses a
+relationship today; `list_active`, `stream_export` and `revoke_all_for_user` are
+measured on every pull request so that the first method which does fails there
+rather than in production.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
