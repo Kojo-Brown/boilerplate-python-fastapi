@@ -6,6 +6,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.exceptions import AppException
+from src.middleware.security_headers import get_security_headers_policy
 
 logger = structlog.get_logger(__name__)
 
@@ -131,16 +132,45 @@ async def rate_limit_exceeded_handler(
     )
 
 
+def apply_security_headers(request: Request, response: JSONResponse) -> JSONResponse:
+    """Stamp `response` with the security headers the middleware would add.
+
+    Needed by exactly one caller, and the reason is structural rather than an
+    oversight. Starlette builds its stack as
+    `ServerErrorMiddleware -> user middleware -> ExceptionMiddleware -> router`,
+    and a handler registered for bare `Exception` is installed on the *first*
+    of those — outside `SecurityHeadersMiddleware`, however early it is added.
+    So the 500 envelope below is the one response in this application that the
+    middleware's `send` never sees, and it is also the response most likely to
+    be reached with a malformed request. `SecurityHeadersPolicy` is a value
+    precisely so the two paths can share it instead of drifting.
+
+    Existing headers are left alone, matching `merge_headers` in the
+    middleware.
+    """
+    policy = get_security_headers_policy()
+    if policy is None:
+        return response
+    for name, value in policy.headers_for(
+        path=request.url.path, secure=request.url.scheme == "https"
+    ):
+        response.headers.setdefault(name, value)
+    return response
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception(
         "unhandled_exception",
         path=str(request.url.path),
     )
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=_error_body(
-            "INTERNAL_SERVER_ERROR",
-            "An unexpected error occurred",
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
+    return apply_security_headers(
+        request,
+        JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=_error_body(
+                "INTERNAL_SERVER_ERROR",
+                "An unexpected error occurred",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ),
         ),
     )

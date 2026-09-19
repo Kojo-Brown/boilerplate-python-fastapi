@@ -10,6 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from src.config import settings
 from src.database import engine
 from src.distributed_lock.factory import get_lock_backend
+from src.docs import build_docs_router
 from src.events.bus import event_bus
 from src.events.subscribers import register_default_subscribers
 from src.exception_handlers import (
@@ -28,6 +29,10 @@ from src.limiter import limiter
 from src.logging_config import configure_logging
 from src.middleware.idempotency import IdempotencyConfig, IdempotencyMiddleware
 from src.middleware.request_id import RequestIDMiddleware
+from src.middleware.security_headers import (
+    SecurityHeadersMiddleware,
+    get_security_headers_policy,
+)
 from src.observability import (
     build_metrics_router,
     configure_observability,
@@ -115,10 +120,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     shutdown_observability(observability, settings)
 
 
+APP_TITLE = "boilerplate-python-fastapi"
+OPENAPI_URL = "/openapi.json"
+
 app = FastAPI(
-    title="boilerplate-python-fastapi",
+    title=APP_TITLE,
     version="0.1.0",
     lifespan=lifespan,
+    openapi_url=OPENAPI_URL,
+    # The three documentation pages are re-registered below, from src/docs.py,
+    # so that their inline scripts can carry a content-security-policy nonce.
+    # FastAPI's own routes render the same HTML without one, and a nonce is the
+    # only thing standing between a strict `script-src` and `'unsafe-inline'`.
+    docs_url=None,
+    redoc_url=None,
 )
 
 app.state.limiter = limiter
@@ -144,8 +159,19 @@ app.add_middleware(
     ),
 )
 app.add_middleware(RequestIDMiddleware)
+# Added last and therefore outermost, which is what makes the policy a property
+# of *every* response rather than of the ones the router produced: a 429 raised
+# by the rate limiter, a replay refused by IdempotencyMiddleware above, and a
+# 404 that never reached a handler all leave through this `send`. The one
+# response it cannot reach is the 500 rendered by ServerErrorMiddleware, which
+# Starlette installs outside the user stack — `unhandled_exception_handler`
+# stamps that one itself, from the same policy object.
+_security_headers_policy = get_security_headers_policy()
+if _security_headers_policy is not None:
+    app.add_middleware(SecurityHeadersMiddleware, policy=_security_headers_policy)
 
 
+app.include_router(build_docs_router(title=APP_TITLE, openapi_url=OPENAPI_URL))
 app.include_router(health_router)
 # Alongside the probes rather than under `/api/v1/`: a scrape endpoint is
 # infrastructure, not part of the versioned API, and nothing generating a
