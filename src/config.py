@@ -516,6 +516,44 @@ class Settings(BaseSettings):
     HEALTH_CHECK_TIMEOUT_SECONDS: float = 2.0
     HEALTH_CACHE_TTL_SECONDS: float = 1.0
 
+    # Response security headers (see src/middleware/security_headers.py and
+    # docs/security-headers.md).
+    #
+    # SECURITY_CSP is the policy for the API itself. `default-src 'none'` is
+    # not a starting point to be relaxed later: a JSON response loads nothing,
+    # embeds nothing and submits no forms, so every fetch directive falling
+    # through to a default that forbids everything is the accurate description
+    # of this application. The documentation pages need a different policy and
+    # get one from the module rather than from here, because what Swagger UI
+    # and ReDoc load is a fact about those pages and not a deployment choice.
+    #
+    # The two `-ancestors` / `-uri` directives are the ones an "API needs no
+    # CSP" argument misses: `frame-ancestors` is what stops this origin being
+    # framed, and `base-uri` what stops an injected `<base>` from re-pointing
+    # every relative URL on a page — neither has anything to do with loading
+    # subresources.
+    #
+    # HSTS is sent on HTTPS responses only, which behind a TLS-terminating
+    # proxy means uvicorn must be trusting `X-Forwarded-Proto` (`--proxy-headers`,
+    # its default) or the header never appears. PRELOAD is off because it is
+    # close to irreversible — a preloaded domain is pinned in browsers that
+    # shipped before you changed your mind — and turning it on requires
+    # INCLUDE_SUBDOMAINS and a MAX_AGE of at least one year, which `HSTSPolicy`
+    # enforces at start-up rather than letting the submission be rejected
+    # months later.
+    SECURITY_HEADERS_ENABLED: bool = True
+    SECURITY_CSP: str = (
+        "default-src 'none'; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    SECURITY_REFERRER_POLICY: str = "strict-origin-when-cross-origin"
+    #: Legacy companion to `frame-ancestors`; "" drops the header.
+    SECURITY_FRAME_OPTIONS: str = "DENY"
+    SECURITY_HSTS_ENABLED: bool = True
+    SECURITY_HSTS_MAX_AGE_SECONDS: int = 31536000  # 1 year
+    SECURITY_HSTS_INCLUDE_SUBDOMAINS: bool = True
+    SECURITY_HSTS_PRELOAD: bool = False
+
     # Prometheus scrape endpoint (see src/observability/prometheus.py,
     # docs/metrics.md).
     #
