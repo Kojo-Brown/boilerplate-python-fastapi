@@ -65,6 +65,53 @@ class UserLoggedIn(UserEvent):
     method: str = "password"
 
 
+@dataclass(frozen=True, kw_only=True)
+class RefreshTokenReuseDetected(DomainEvent):
+    """An already-used refresh token was presented, and its family was killed.
+
+    Rotation makes a refresh token single-use, so a used one coming back means
+    two parties hold the same credential and the server cannot tell which of
+    them is the account owner — see `docs/refresh-token-reuse.md`. Every live
+    session in the family is ended before the request is refused, and this is
+    the record of that having happened.
+
+    Published *before* the 401 rather than after, because there is no after:
+    the request ends in an exception, and a subscriber that needs to reach the
+    account owner ("you have been signed out everywhere, and here is why")
+    would otherwise be reacting to a response nobody returns. It rides the
+    outbox with the revocation, so the alert and the revocation commit together
+    or not at all.
+
+    **Not a `UserEvent`, deliberately**, though it names a user. That base
+    requires `email`, and `AuthService._handle_reuse` does not have one: it has
+    a token row. Inheriting would mean loading the account to fill a field —
+    a database round trip added to the one path whose rate an attacker chooses,
+    for a value this module's own rule says does not belong in an event
+    ("a handler that needs the full row should load it itself"). It is also not
+    the same kind of fact: the other user events record what the user did, and
+    this one records what the server did to them.
+    """
+
+    event_name: ClassVar[str] = "user.refresh_token_reuse_detected"
+
+    #: The account whose sessions were ended. A string for the same reason
+    #: every id here is one: outbox payloads carry JSON scalars only
+    #: (`src/outbox/codec.py`), and a `uuid.UUID` is refused at publish time.
+    user_id: str
+
+    #: The authorization grant that was revoked — `family_id` on the rows, and
+    #: the value to search the table by when reading the incident back.
+    family_id: str
+
+    #: How many *live* sessions this revocation ended. Usually 1 — rotation
+    #: leaves one live link per chain — so a larger number is itself worth
+    #: alerting on: it means tokens were being issued in parallel on one grant.
+    #: Zero is the ordinary case for a replay against a family that was already
+    #: revoked, and distinguishes "we just cut someone off" from "we refused a
+    #: request against a session that had already ended".
+    sessions_revoked: int
+
+
 #: The event types that can be read back out of the transactional outbox.
 #
 # An outbox row stores `event_name` and its fields; turning that back into an
@@ -79,4 +126,5 @@ class UserLoggedIn(UserEvent):
 EVENT_TYPES: Final[tuple[type[DomainEvent], ...]] = (
     UserRegistered,
     UserLoggedIn,
+    RefreshTokenReuseDetected,
 )

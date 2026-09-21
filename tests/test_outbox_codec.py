@@ -20,7 +20,12 @@ import pytest
 
 from src.events import catalog
 from src.events.base import DomainEvent
-from src.events.catalog import EVENT_TYPES, UserLoggedIn, UserRegistered
+from src.events.catalog import (
+    EVENT_TYPES,
+    RefreshTokenReuseDetected,
+    UserLoggedIn,
+    UserRegistered,
+)
 from src.outbox.base import (
     EventNotDecodableError,
     EventNotSerializableError,
@@ -259,7 +264,11 @@ def test_every_publishable_catalogue_event_is_registered() -> None:
     bases = {base for event in declared for base in event.__mro__[1:]}
     publishable = declared - bases
 
-    expected: set[type[DomainEvent]] = {UserRegistered, UserLoggedIn}
+    expected: set[type[DomainEvent]] = {
+        UserRegistered,
+        UserLoggedIn,
+        RefreshTokenReuseDetected,
+    }
     assert publishable == set(EVENT_TYPES)
     assert publishable == expected
 

@@ -34,9 +34,19 @@ from src.models.user import User
 
 
 def _result_mock(value: object) -> MagicMock:
-    """Return a MagicMock whose .scalar_one_or_none() returns *value*."""
+    """Return a MagicMock that answers both shapes a repository reads a result in.
+
+    `.scalar_one_or_none()` is the single-row lookup. `.scalars().all()` is the
+    collection one — `revoke_family` reads that way — and a MagicMock left to
+    invent it returns another MagicMock, which is not iterable, so the endpoint
+    fails with a 500 that says nothing about the code under test. `[value]`
+    rather than the WHERE clause's real answer: this mock is not a database and
+    does not filter, so a test whose subject is *which* rows come back belongs
+    against the in-memory stores or real Postgres, not here.
+    """
     m = MagicMock()
     m.scalar_one_or_none.return_value = value
+    m.scalars.return_value.all.return_value = [] if value is None else [value]
     return m
 
 
@@ -298,6 +308,7 @@ async def test_refresh_revoked_token_returns_401(
         id=uuid.uuid4(),
         token=token_str,
         user_id=user_id,
+        family_id=uuid.uuid4(),
         expires_at=expires_at,
         revoked=True,
         created_at=datetime.now(UTC),
@@ -309,6 +320,11 @@ async def test_refresh_revoked_token_returns_401(
         json={"refresh_token": token_str},
     )
 
+    # Still a 401 now that a replayed token also revokes its family on the way
+    # out: the edge's contract did not change, and the caller is told no
+    # differently than one presenting a token that was never issued. What the
+    # revocation actually does is asserted in `test_refresh_token_reuse.py`,
+    # against stores that can answer a WHERE clause.
     assert response.status_code == 401
 
 

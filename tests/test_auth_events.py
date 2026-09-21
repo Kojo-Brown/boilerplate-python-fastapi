@@ -243,7 +243,12 @@ async def test_a_refresh_is_not_a_login(
     user = make_user()
     token_str, expires_at = create_refresh_token(str(user.id), str(uuid.uuid4()))
     tokens = InMemoryRefreshTokenStore()
-    await tokens.create(token=token_str, user_id=user.id, expires_at=expires_at)
+    await tokens.create(
+        token=token_str,
+        user_id=user.id,
+        expires_at=expires_at,
+        family_id=uuid.uuid4(),
+    )
 
     await service_over(bus, users=[user], tokens=tokens).refresh(token_str)
 

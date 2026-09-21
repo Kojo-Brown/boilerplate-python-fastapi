@@ -307,6 +307,19 @@ relationship today; `list_active`, `stream_export` and `revoke_all_for_user` are
 measured on every pull request so that the first method which does fails there
 rather than in production.
 
+## Refresh-token reuse detection
+[docs/refresh-token-reuse.md](./docs/refresh-token-reuse.md) — rotation makes a
+refresh token single-use, which turns "has this token been used twice?" into a
+question the server can answer even though "was it stolen?" is one it never
+can. A replayed token revokes the whole `family_id` — every live token
+descended from that login — because the two parties holding the same bytes are
+indistinguishable, and any rule that picks a winner is one an attacker wins by
+polling faster (RFC 9700 §4.14.2). The document covers what does *not* count as
+reuse and why, the asymmetry between logging out with a spent token and
+refreshing with one, and the failure this is easiest to ship: `get_db` never
+commits, so a revocation left pending when the 401 propagates is rolled back
+and the mitigation does nothing while every status-code test stays green.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
