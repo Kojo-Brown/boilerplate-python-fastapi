@@ -165,7 +165,10 @@ async def test_auth_service_refresh_revoked_token(
     token_str, expires_at = create_refresh_token(str(user_id), jti)
 
     stored = await token_store.create(
-        token=token_str, user_id=user_id, expires_at=expires_at
+        token=token_str,
+        user_id=user_id,
+        expires_at=expires_at,
+        family_id=uuid.uuid4(),
     )
     stored.revoked = True
 

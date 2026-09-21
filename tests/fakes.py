@@ -33,7 +33,7 @@ from sqlalchemy.orm import class_mapper
 
 from src.events.base import DomainEvent
 from src.health.base import Criticality
-from src.models.refresh_token import RefreshToken
+from src.models.refresh_token import RefreshToken, RevocationReason
 from src.models.user import User
 
 
@@ -143,18 +143,45 @@ class InMemoryRefreshTokenStore:
         token: str,
         user_id: uuid.UUID,
         expires_at: datetime,
+        family_id: uuid.UUID,
     ) -> RefreshToken:
-        stored = RefreshToken(token=token, user_id=user_id, expires_at=expires_at)
+        stored = RefreshToken(
+            token=token,
+            user_id=user_id,
+            expires_at=expires_at,
+            family_id=family_id,
+        )
         apply_column_defaults(stored)
         self.tokens.append(stored)
         return stored
 
-    async def revoke(self, token: str) -> bool:
+    async def revoke(self, token: str, *, reason: RevocationReason = "logout") -> bool:
         stored = await self.get_by_token(token)
         if stored is None:
             return False
-        stored.revoked = True
+        self._mark_revoked(stored, reason)
         return True
+
+    async def revoke_family(
+        self, family_id: uuid.UUID, *, reason: RevocationReason
+    ) -> int:
+        live = [t for t in self.tokens if t.family_id == family_id and not t.revoked]
+        for t in live:
+            self._mark_revoked(t, reason)
+        return len(live)
+
+    @staticmethod
+    def _mark_revoked(stored: RefreshToken, reason: RevocationReason) -> None:
+        """Stamp the three columns the real repository stamps together.
+
+        Restated rather than imported from `src/repositories/refresh_token.py`:
+        a fake that calls the adapter it is standing in for stops being able to
+        fail independently of it, and `test_refresh_token_reuse.py` asserts
+        against both.
+        """
+        stored.revoked = True
+        stored.revoked_at = datetime.now(UTC)
+        stored.revoked_reason = reason
 
 
 class RecordingUnitOfWork:

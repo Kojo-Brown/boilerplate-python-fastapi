@@ -106,18 +106,28 @@ async def test_the_token_store_round_trips_and_revokes() -> None:
     store = InMemoryRefreshTokenStore()
     user_id = uuid.uuid4()
 
+    family_id = uuid.uuid4()
+
     stored = await store.create(
         token="mock-refresh-token",
         user_id=user_id,
         expires_at=datetime.now(UTC) + timedelta(days=7),
+        family_id=family_id,
     )
 
     assert isinstance(stored.id, uuid.UUID)
     assert stored.revoked is _column_default(RefreshToken, "revoked")
+    assert stored.family_id == family_id
+    # Live tokens carry no provenance, which is what makes the two columns
+    # readable as evidence rather than as defaults.
+    assert stored.revoked_at is None
+    assert stored.revoked_reason is None
     assert await store.get_by_token("mock-refresh-token") is stored
 
-    assert await store.revoke("mock-refresh-token") is True
+    assert await store.revoke("mock-refresh-token", reason="logout") is True
     assert stored.revoked is True
+    assert stored.revoked_reason == "logout"
+    assert stored.revoked_at is not None
     # Revoking something that was never stored is not an error: the caller
     # wanted it unusable and it is.
     assert await store.revoke("mock-unknown-token") is False

@@ -39,7 +39,7 @@ import uuid
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from src.models.refresh_token import RefreshToken
+from src.models.refresh_token import RefreshToken, RevocationReason
 from src.models.user import User
 
 
@@ -102,15 +102,36 @@ class RefreshTokenStore(Protocol):
         token: str,
         user_id: uuid.UUID,
         expires_at: datetime,
+        family_id: uuid.UUID,
     ) -> RefreshToken:
-        """Store a newly issued refresh token."""
+        """Store a newly issued refresh token as a member of `family_id`.
+
+        `family_id` is required rather than defaulted for the reason the
+        concrete repository spells out: the model supplies a fresh UUID when
+        nobody passes one, so an omission produces a token that works until the
+        day it has to be revoked alongside its siblings.
+        """
         ...
 
-    async def revoke(self, token: str) -> bool:
+    async def revoke(self, token: str, *, reason: RevocationReason = ...) -> bool:
         """Mark a token unusable. `False` if it was never stored.
 
         A logout for a token that does not exist is not an error — the caller
         wanted it gone and it is gone — which is why this answers with a bool
         rather than raising.
+        """
+        ...
+
+    async def revoke_family(
+        self, family_id: uuid.UUID, *, reason: RevocationReason
+    ) -> int:
+        """Revoke every live token descended from one login. Returns the count.
+
+        On the protocol rather than left to the concrete repository because it
+        is policy's move, not storage's housekeeping: `AuthService` calls it the
+        moment it sees an already-used token come back, and a fake that cannot
+        do it cannot be handed to the service at all. `reason` has no default
+        here for the same reason — every caller of this one has something
+        specific to record, and the two callers record different things.
         """
         ...

@@ -69,6 +69,11 @@ class RefreshTokenFactory(factory.Factory):
     id = factory.LazyFunction(uuid.uuid4)
     token = factory.LazyFunction(lambda: _fake.sha256())
     user_id = factory.LazyFunction(uuid.uuid4)
+    # A fresh family per built token, which is what a login produces. A test
+    # that needs two tokens in the *same* family — the shape rotation leaves
+    # behind, and the only shape reuse detection has anything to say about —
+    # passes `family_id=` explicitly, so that relationship is never accidental.
+    family_id = factory.LazyFunction(uuid.uuid4)
     expires_at = factory.LazyFunction(lambda: datetime.now(UTC) + timedelta(days=7))
     revoked = False
     created_at = factory.LazyFunction(lambda: datetime.now(UTC))
