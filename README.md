@@ -320,6 +320,22 @@ refreshing with one, and the failure this is easiest to ship: `get_db` never
 commits, so a revocation left pending when the 401 propagates is rolled back
 and the mitigation does nothing while every status-code test stays green.
 
+## Field-level encryption at rest
+[docs/field-encryption.md](./docs/field-encryption.md) — AES-256-GCM behind a
+SQLAlchemy `TypeDecorator`, applied to `users.notification_webhook_url`, which
+is a credential in practice: most incident tools put the shared secret straight
+in the URL. Volume encryption only stops somebody walking off with the disk; a
+leaked replica, a `pg_dump` in a CI artifact and a `SELECT` all see plaintext,
+and this moves the boundary to a key the database has never held. The column's
+durable name is bound into every value's authentication tag, so a ciphertext
+moved between *columns* fails to open — moved between *rows* it does not, and
+the document says why and where the test that measures it lives. Randomised
+means unsearchable, so the comparator raises on `==`, `like` and the rest
+instead of quietly matching nothing. Keys are a ring with ids in the clear
+inside each value, because rotation needs two live at once; the three-step
+order that avoids making rows unreadable is written down, as is the one step
+that cannot be undone.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

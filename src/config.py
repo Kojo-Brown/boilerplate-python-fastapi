@@ -575,5 +575,28 @@ class Settings(BaseSettings):
     # time. Comes from the environment like every other credential here.
     PROMETHEUS_SCRAPE_TOKEN: str = ""
 
+    # Field-level encryption at rest (see src/encryption/, docs/field-encryption.md).
+    #
+    # ENCRYPTION_KEYS is `id:base64-key` entries separated by commas, and it is
+    # a list rather than one key because rotation needs two live at once: a
+    # value carries the id of the key it was sealed under, so a ring that still
+    # holds the retiring key can read old rows while ENCRYPTION_ACTIVE_KEY_ID
+    # seals new ones under the new key. Removing a key from this list before
+    # every row written under it has been re-encrypted is the one irreversible
+    # mistake available here.
+    #
+    # The default below is published in this repository, which is the point: a
+    # boilerplate where `cp .env.example .env` produces an application that
+    # will not boot teaches the wrong lesson. It decodes to ASCII that says
+    # what it is, and `build_key_ring` refuses it outright when ENVIRONMENT is
+    # `production` — failing start-up there rather than encrypting a column
+    # with a key anyone can read off GitHub.
+    #
+    # Key ids are not secret. They name a secret, they travel in the clear
+    # inside every stored value, and they appear in logs; a date or a KMS alias
+    # is the right shape.
+    ENCRYPTION_KEYS: str = "dev:aW5zZWN1cmUtZGV2ZWxvcG1lbnQta2V5LW5vdHJlYWw="
+    ENCRYPTION_ACTIVE_KEY_ID: str = "dev"
+
 
 settings: Final[Settings] = Settings()
