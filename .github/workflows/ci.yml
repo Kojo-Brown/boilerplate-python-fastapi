@@ -176,6 +176,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: test
       AWS_REGION: us-east-1
       AWS_S3_BUCKET: test-bucket
+      # Published in this repository on purpose — the base64 decodes to ASCII
+      # saying what it is — and refused by src/encryption/keys.py whenever
+      # ENVIRONMENT is "production". The migration step below encrypts with it,
+      # so it has to be set before `alembic upgrade head`.
+      ENCRYPTION_KEYS: ci:aW5zZWN1cmUtY2kta2V5LW5vdC1mb3ItcmVhbC11c2U=
+      ENCRYPTION_ACTIVE_KEY_ID: ci
 
     steps:
       - uses: actions/checkout@v4

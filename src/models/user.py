@@ -6,6 +6,7 @@ from sqlalchemy import UUID, Boolean, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database import Base
+from src.encryption import EncryptedString
 
 if TYPE_CHECKING:
     from src.models.refresh_token import RefreshToken
@@ -46,8 +47,25 @@ class User(Base):
     notification_channel: Mapped[str] = mapped_column(
         String(20), nullable=False, default="email", server_default="email"
     )
+    # Encrypted at rest (see src/encryption/, docs/field-encryption.md). A
+    # user-supplied webhook URL is a credential in practice — Slack, Discord
+    # and most incident tools put the shared secret in the path — so a database
+    # dump, a stray replica or a restored backup hands over the ability to post
+    # into somebody's channel. That is the one column in this table whose value
+    # is directly usable by whoever reads it, and it is never filtered or
+    # sorted on: `src/notifications/recipients.py` loads the row and reads the
+    # attribute, which is the access pattern encryption costs nothing on.
+    #
+    # `String(2048)` is gone with the plaintext, so the length ceiling is now
+    # enforced only by `ProfileUpdateRequest` at the edge. That is where it was
+    # doing the work anyway — the database limit produced a 500 rather than a
+    # 422 — but it does mean a writer that bypasses the schema has no backstop.
+    #
+    # The literal below is the column's durable identity, bound into every
+    # value's authentication tag. It must not be changed to follow a rename:
+    # see the module docstring in src/encryption/types.py.
     notification_webhook_url: Mapped[str | None] = mapped_column(
-        String(2048), nullable=True
+        EncryptedString("users.notification_webhook_url"), nullable=True
     )
 
     # Optimistic concurrency. SQLAlchemy owns this counter: it sets it to 1 on

@@ -11,6 +11,7 @@ from src.config import settings
 from src.database import engine
 from src.distributed_lock.factory import get_lock_backend
 from src.docs import build_docs_router
+from src.encryption import validate_encryption_configuration
 from src.events.bus import event_bus
 from src.events.subscribers import register_default_subscribers
 from src.exception_handlers import (
@@ -47,6 +48,14 @@ from src.ws.rooms import room_registry
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_logging(settings.LOG_LEVEL)
+    # First, and before anything opens a connection: every column type in
+    # src/models/ resolves its key lazily, so a broken ENCRYPTION_KEYS would
+    # otherwise stay invisible until the first request that touched an
+    # encrypted column — one replica, minutes after the rollout was called a
+    # success. Building the ring here makes it a failed start-up instead.
+    # Logging is configured above it so the warning about a published
+    # development key comes out formatted.
+    validate_encryption_configuration(settings)
     # At start-up rather than at import, so that importing a module never
     # turns on a side effect and a unit test gets an empty bus by default.
     register_default_subscribers()

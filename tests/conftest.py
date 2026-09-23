@@ -25,6 +25,16 @@ os.environ.setdefault("IDEMPOTENCY_BACKEND", "memory")
 # mode would be decided by whichever test happened to instrument first, and the
 # metric names asserted in `test_metrics_*.py` would depend on test order.
 os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
+# Field-level encryption keys. Set here rather than left to the default in
+# `src/config.py` so the suite states the key it runs against instead of
+# inheriting whichever one a developer's `.env` happens to carry — the
+# ciphertext in `tests/test_encryption_db.py` is asserted on, so the key is
+# part of the fixture. Obviously fake, and refused outright in production by
+# `build_key_ring`.
+os.environ.setdefault(
+    "ENCRYPTION_KEYS", "test:aW5zZWN1cmUtZGV2ZWxvcG1lbnQta2V5LW5vdHJlYWw="
+)
+os.environ.setdefault("ENCRYPTION_ACTIVE_KEY_ID", "test")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
