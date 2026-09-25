@@ -598,5 +598,19 @@ class Settings(BaseSettings):
     ENCRYPTION_KEYS: str = "dev:aW5zZWN1cmUtZGV2ZWxvcG1lbnQta2V5LW5vdHJlYWw="
     ENCRYPTION_ACTIVE_KEY_ID: str = "dev"
 
+    # PII redaction in the log pipeline (see src/redaction/,
+    # docs/pii-redaction.md).
+    #
+    # Comma-separated field names that this deployment wants redacted on top of
+    # the built-in list. Each entry is split into words the same way a real
+    # field name is, so `employeeNumber` and `employee_number` are the same
+    # entry.
+    #
+    # It can only widen. There is deliberately no setting that narrows the list
+    # and none that turns redaction off: that switch is one hurried incident
+    # away from being set by somebody who will not be the person who discovers,
+    # a month later, that it was never set back.
+    LOG_REDACTION_EXTRA_KEYS: str = ""
+
 
 settings: Final[Settings] = Settings()
