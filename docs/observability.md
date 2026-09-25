@@ -172,6 +172,11 @@ The forwarder never raises: it sits in the chain of every `logger.info` in this
 codebase, including the ones inside exception handlers, and an export failure
 must not become a failed request. stdout remains the log of record.
 
+The forwarder is a **sink**, which is why PII redaction is ordered against it
+rather than against the renderer: `src/redaction` runs immediately before
+`structlog_processors()`, so what leaves over OTLP is the same redacted event
+that reaches stdout. See [pii-redaction.md](./pii-redaction.md).
+
 ## W3C context propagation
 
 The propagators are installed globally as a composite of trace context and

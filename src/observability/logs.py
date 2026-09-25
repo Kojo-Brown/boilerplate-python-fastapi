@@ -260,6 +260,12 @@ def structlog_processors() -> list[structlog.types.Processor]:
     Order matters: correlation first, so that the ids it adds are in the dict
     the renderer writes to stdout, and the forwarder second, which skips them
     because the record carries them structurally.
+
+    Order matters *outside* this list too. The forwarder is a second sink, not
+    a decorator on the first, so anything that has to hold for what this
+    process emits has to run before it and not merely before the renderer —
+    which is why `configure_logging` puts the PII redactor immediately ahead of
+    this call. See `src/redaction/processor.py`.
     """
     return [add_trace_correlation, log_forwarder]
 

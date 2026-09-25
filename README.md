@@ -336,6 +336,20 @@ inside each value, because rotation needs two live at once; the three-step
 order that avoids making rows unreadable is written down, as is the one step
 that cannot be undone.
 
+## PII redaction in logs
+[docs/pii-redaction.md](./docs/pii-redaction.md) — a structlog processor that
+strips personal data and credentials out of every event, because a call site
+cannot be trusted forever but a processor the events cannot go round can.
+Position is the decision: `configure_logging` has two sinks on one chain, and a
+redactor behind the OTLP forwarder cleans stdout while exporting the original —
+the one order that passes every test anyone naturally writes. Field names are
+matched on contiguous word runs, so `user_email` is caught while `idempotency_key`
+and `passengers` are not, and four obvious names are off the list for a field
+each would have hollowed out. Values are matched by shape with a real check
+behind every detector — Luhn, mod-97, a decoded JOSE header — so a sixteen-digit
+order id survives; detectors with nothing to check are left out on purpose. It
+fails closed, and there is no setting that turns it off.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
