@@ -42,6 +42,7 @@ from src.observability import (
 from src.outbox.factory import get_outbox_relay
 from src.parallel.factory import get_cpu_pool
 from src.sse.hub import event_stream_hub
+from src.webhooks.factory import close_replay_guard
 from src.ws.rooms import room_registry
 
 
@@ -105,6 +106,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # The idempotency store owns a connection pool. Closing it here rather than
     # leaving it to garbage collection keeps a reload from leaking sockets.
     await get_idempotency_store().close()
+    # Same again for the webhook replay guard, which owns a Redis pool of its
+    # own. A process that never received a webhook closes a client that never
+    # opened a socket, redis-py connecting lazily, so this costs nothing in the
+    # deployments that mount no receiving route.
+    await close_replay_guard()
     # Same for the distributed lock backend. Building it here when nothing has
     # asked for one yet costs nothing: redis-py connects lazily, so an unused
     # backend closes a pool that never opened a socket.

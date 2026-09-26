@@ -350,6 +350,24 @@ behind every detector — Luhn, mod-97, a decoded JOSE header — so a sixteen-d
 order id survives; detectors with nothing to check are left out on purpose. It
 fails closed, and there is no setting that turns it off.
 
+## Signed webhooks
+[docs/webhook-signatures.md](./docs/webhook-signatures.md) — HMAC-SHA256
+verification for deliveries arriving *at* this application, sharing one format
+module with the notification strategy that signs the ones leaving it, so the two
+cannot drift. The timestamp is inside the signed material, which is what stops a
+capture being resent with the header rewritten — and the verifier reads no
+timestamp header at all, because the one sent beside a signature is unsigned and
+trusting it accepts a year-old capture as current, identically on every genuine
+delivery and therefore invisibly. A tolerance window bounds replay rather than
+preventing it, so claims are remembered in Redis, keyed on the delivery instead
+of on the signature (a rotation would otherwise rename a capture and grant one
+free replay) and held for *twice* the tolerance, since a delivery stamped `T` is
+still good at `T + tolerance`. The guard is asked only after the signature
+verifies: the other order lets anybody on the internet write a record per
+request into a store every replica shares. Comparison is `hmac.compare_digest`
+over digests validated as hex first — without that, 64 accented characters are a
+500 rather than a rejected delivery.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how
