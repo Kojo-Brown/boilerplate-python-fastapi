@@ -10,8 +10,6 @@ to the caller.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -28,6 +26,7 @@ from src.notifications.base import (
     RecipientNotReachableError,
     validate_webhook_url,
 )
+from src.webhooks.signature import sign
 
 logger = structlog.get_logger(__name__)
 
@@ -48,13 +47,18 @@ def sign_payload(secret: str, timestamp: int, body: bytes) -> str:
     """Return the value for `X-Notification-Signature`.
 
     The timestamp is inside the signed material, not merely alongside it, so a
-    captured delivery cannot be replayed later with the header rewritten. The
-    receiver recomputes `HMAC(secret, f"{t}.{body}")`, compares with
-    `hmac.compare_digest`, and rejects anything older than its tolerance.
+    captured delivery cannot be replayed later with the header rewritten. A
+    receiver recomputes the digest, compares it with `hmac.compare_digest`, and
+    refuses anything outside its tolerance — which is what `src/webhooks/` does
+    for deliveries arriving *at* this application.
+
+    The format lives in `src/webhooks/signature.py` and not here. It was written
+    out twice, once per direction, until this application grew a receiver; two
+    implementations of one wire format work perfectly until somebody adjusts the
+    separator on one side, and the failure is a partner whose integration stops
+    verifying. This stays as the name the notification code and its tests use.
     """
-    signed = f"{timestamp}.".encode() + body
-    digest = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
-    return f"t={timestamp},v1={digest}"
+    return sign(secret, timestamp, body)
 
 
 class WebhookNotificationStrategy:
@@ -154,6 +158,11 @@ class WebhookNotificationStrategy:
         # receiver doing a naive comparison.
         if self._secret:
             timestamp = int(self._clock())
+            # Sent for a human reading a request log, and for nothing else. The
+            # authoritative timestamp is the `t=` inside the signature, which is
+            # covered by the digest; this one is not, so a receiver that takes
+            # its replay window from here accepts a capture of any age. That is
+            # why `src/webhooks/` never reads it.
             headers[TIMESTAMP_HEADER] = str(timestamp)
             headers[SIGNATURE_HEADER] = sign_payload(self._secret, timestamp, body)
 

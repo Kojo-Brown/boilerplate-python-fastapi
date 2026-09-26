@@ -598,6 +598,53 @@ class Settings(BaseSettings):
     ENCRYPTION_KEYS: str = "dev:aW5zZWN1cmUtZGV2ZWxvcG1lbnQta2V5LW5vdHJlYWw="
     ENCRYPTION_ACTIVE_KEY_ID: str = "dev"
 
+    # Inbound webhook verification (see src/webhooks/,
+    # docs/webhook-signatures.md). Nothing in the default application receives
+    # webhooks, so none of this is read until a route depends on
+    # `VerifiedWebhookDep`; there is deliberately no start-up validation for a
+    # feature a deployment may not use.
+    #
+    # `id:secret` entries separated by commas, and a set rather than one value
+    # because rotating a shared secret needs both halves live at once. The id
+    # is not secret — it names a secret, and it is logged so that a rotation
+    # can be seen to finish. A secret may contain a ':' but not a ','.
+    #
+    # Empty is refused rather than treated as "accept anything": an endpoint
+    # that is unconfigured and one that is unauthenticated must not look alike.
+    # `.env.example` carries the development secret published in this
+    # repository, which `build_signing_secrets` refuses when ENVIRONMENT is
+    # "production".
+    WEBHOOK_SIGNING_SECRETS: str = ""
+    # Overridable because a third party names it whatever it likes
+    # (`Stripe-Signature`, `X-Hub-Signature-256`). The name is not signed.
+    WEBHOOK_SIGNATURE_HEADER: str = "X-Webhook-Signature"
+    # How far the signed timestamp may sit from this server's clock, in either
+    # direction. The future side is bounded too: a sender whose clock runs fast
+    # would otherwise produce deliveries that stay replayable until our clock
+    # catches up with them.
+    WEBHOOK_TOLERANCE_SECONDS: int = 300
+    # Replay protection. "none" keeps signature verification and drops the
+    # memory of past deliveries, which leaves a capture reusable for as long as
+    # its timestamp stays inside the window above; the factory logs a warning
+    # saying so. "memory" is per-process and so recognises nothing a sibling
+    # worker has already accepted.
+    WEBHOOK_REPLAY_BACKEND: Literal["redis", "memory", "none"] = "redis"
+    WEBHOOK_REPLAY_REDIS_URL: str = ""
+    # Must be at least twice WEBHOOK_TOLERANCE_SECONDS, and the verifier refuses
+    # to be built otherwise. A delivery stamped T is acceptable from T-tolerance
+    # to T+tolerance, so a claim made the moment it becomes acceptable has to
+    # survive until it stops being — a guard that forgets sooner still passes
+    # every test that claims twice in a row.
+    WEBHOOK_REPLAY_TTL_SECONDS: int = 900
+    # Accept deliveries without a replay check when the guard is unreachable.
+    # Off, for the reason IDEMPOTENCY_FAIL_OPEN is off: the sender's own retry
+    # brings the delivery back, and a replay window nobody opened on purpose is
+    # worse than a delivery that arrives late.
+    WEBHOOK_REPLAY_FAIL_OPEN: bool = False
+    # Bounds the body an unauthenticated caller can make this process buffer and
+    # HMAC. See src/webhooks/dependencies.py on what it cannot bound.
+    WEBHOOK_MAX_BODY_BYTES: int = 1048576  # 1 MiB
+
     # PII redaction in the log pipeline (see src/redaction/,
     # docs/pii-redaction.md).
     #

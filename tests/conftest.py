@@ -1,8 +1,9 @@
 import os
 import secrets
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Iterator
 from datetime import UTC, datetime
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
 
 # Must be set before any application imports so pydantic-settings can validate
@@ -25,6 +26,21 @@ os.environ.setdefault("IDEMPOTENCY_BACKEND", "memory")
 # mode would be decided by whichever test happened to instrument first, and the
 # metric names asserted in `test_metrics_*.py` would depend on test order.
 os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
+# Inbound webhook verification. Set here rather than left to the defaults in
+# `src/config.py` because the two environments the suite runs in disagree: a
+# developer has a `.env` from `.env.example`, which carries a secret, and CI sets
+# environment variables and has no `.env` at all, where the default is empty and
+# every verifier build would raise. Stating it here makes the suite run against
+# the same configuration either way. Obviously fake, and refused outright in
+# production by `build_signing_secrets`.
+os.environ.setdefault(
+    "WEBHOOK_SIGNING_SECRETS", "test:insecure-test-webhook-secret-notreal"
+)
+# The app's verifier gets the in-process replay guard, so importing `src.main`
+# never opens a Redis connection pool and the suite runs without a server. The
+# Redis guard itself is covered directly, against a real server, in
+# `test_webhook_replay_redis.py`.
+os.environ.setdefault("WEBHOOK_REPLAY_BACKEND", "memory")
 # Field-level encryption keys. Set here rather than left to the default in
 # `src/config.py` so the suite states the key it runs against instead of
 # inheriting whichever one a developer's `.env` happens to carry — the
@@ -36,9 +52,14 @@ os.environ.setdefault(
 )
 os.environ.setdefault("ENCRYPTION_ACTIVE_KEY_ID", "test")
 
+import logging
+
 import pytest
+import structlog
 from httpx import ASGITransport, AsyncClient
 from pytest_factoryboy import register
+from structlog.testing import LogCapture
+from structlog.typing import EventDict
 
 from src.auth.dependencies import get_current_user
 from src.auth.service import AuthService
@@ -294,3 +315,58 @@ async def fake_backed_client(
         yield client
 
     app.dependency_overrides.clear()
+
+
+#: What `capture_module_logs` hands back: call it with the module whose `logger`
+#: the test is about, and get the list its events land in.
+LogCapturer = Callable[[ModuleType], list[EventDict]]
+
+
+@pytest.fixture
+def capture_module_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[LogCapturer]:
+    """Capture what one module's `logger` emits during this test.
+
+    `structlog.testing.capture_logs` is the obvious tool and it is not enough by
+    itself, for two reasons that only show up once a suite is large enough for
+    ordering to vary.
+
+    **A cached logger is frozen, list and all.** With
+    `cache_logger_on_first_use=True` — which `configure_logging` sets —
+    `BoundLoggerLazyProxy.bind()` assembles a logger against whatever
+    `_CONFIG.default_processors` *object* exists at first use and then replaces
+    its own `bind` with one that returns that logger for good. `capture_logs`
+    mutates the configured list in place specifically to reach such a logger,
+    which works right up until something calls `configure(processors=[...])` with
+    a **new** list — as `configure_logging` does — after the logger was cached.
+    From then on the module's logger points at a list nothing can reach, and
+    whether that has happened depends on whether an earlier test ran the app
+    lifespan. Substituting a fresh proxy is the only way back, and there is no
+    public API for un-caching one.
+
+    **The level is frozen too.** `configure_logging` builds a *filtering* bound
+    logger from `LOG_LEVEL` — WARNING in CI — so an `info` event is discarded
+    before any processor runs and no processor swap can see it.
+
+    So this rebinds the module's logger to a fresh proxy and configures the level
+    and the caching explicitly, which together make a log assertion depend on
+    nothing but the code under test. `test_observability_http.py` builds half of
+    this for the same reason. Entries carry `log_level`, exactly as
+    `capture_logs` yields them, because `LogCapture` is still what collects them.
+    """
+    original = structlog.get_config()
+
+    def capture(module: ModuleType) -> list[EventDict]:
+        collector = LogCapture()
+        structlog.configure(
+            processors=[collector],
+            wrapper_class=structlog.make_filtering_bound_logger(logging.NOTSET),
+            logger_factory=structlog.PrintLoggerFactory(),
+            cache_logger_on_first_use=False,
+        )
+        monkeypatch.setattr(module, "logger", structlog.get_logger(module.__name__))
+        return collector.entries
+
+    yield capture
+    structlog.configure(**original)
