@@ -7,6 +7,8 @@ from src.storage.base import (
     StoredObject,
     UnknownStorageBackendError,
     build_object_key,
+    owner_key_prefix,
+    require_key_owned_by,
     validate_object_key,
     validate_upload,
 )
@@ -30,6 +32,8 @@ __all__ = [
     "UnknownStorageBackendError",
     "build_object_key",
     "get_storage",
+    "owner_key_prefix",
+    "require_key_owned_by",
     "validate_object_key",
     "validate_upload",
 ]

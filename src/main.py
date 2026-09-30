@@ -7,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
+from src.auth.password import prime_password_hasher
 from src.config import settings
 from src.database import engine
 from src.distributed_lock.factory import get_lock_backend
@@ -57,6 +58,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Logging is configured above it so the warning about a published
     # development key comes out formatted.
     validate_encryption_configuration(settings)
+    # One argon2 hash, so that the first login against an unregistered address
+    # does not pay for it — see `prime_password_hasher`. Cheap, and here rather
+    # than at import because an import that burns 75ms of CPU is a surprise.
+    prime_password_hasher()
     # At start-up rather than at import, so that importing a module never
     # turns on a side effect and a unit test gets an empty bus by default.
     register_default_subscribers()

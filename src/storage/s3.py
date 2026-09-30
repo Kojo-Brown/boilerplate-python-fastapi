@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from functools import lru_cache
 from typing import TYPE_CHECKING, TypedDict
 
@@ -17,6 +18,7 @@ from src.storage.base import (
     StorageError,
     StoredObject,
     build_object_key,
+    require_key_owned_by,
     validate_object_key,
     validate_upload,
 )
@@ -64,16 +66,21 @@ def generate_presigned_upload(
     folder: str,
     filename: str,
     content_type: str,
+    owner_id: uuid.UUID | str,
     expiry: int | None = None,
 ) -> PresignedUploadResult:
-    """Return a presigned POST payload for direct S3 upload."""
+    """Return a presigned POST payload for direct S3 upload by `owner_id`.
+
+    The minted key lands in that account's namespace, which is what gives the
+    download side something to authorise against — see `owner_key_prefix`.
+    """
     if content_type not in ALLOWED_CONTENT_TYPES:
         raise BadRequestError(
             f"Content type '{content_type}' is not allowed.",
             details={"allowed": sorted(ALLOWED_CONTENT_TYPES)},
         )
 
-    key = build_object_key(folder, filename)
+    key = build_object_key(folder, filename, owner_id=owner_id)
     ttl = expiry if expiry is not None else settings.AWS_S3_PRESIGNED_URL_EXPIRY
 
     try:
@@ -101,9 +108,25 @@ def generate_presigned_upload(
 def generate_presigned_download(
     *,
     key: str,
+    owner_id: uuid.UUID | str,
     expiry: int | None = None,
 ) -> PresignedDownloadResult:
-    """Return a presigned GET URL for an existing S3 object."""
+    """Return a presigned GET URL for `owner_id`'s object at `key`.
+
+    `owner_id` is keyword-only and has no default because this function is the
+    authorisation boundary for reads out of the bucket, and it used to have
+    none: it took whatever key the request named and signed a URL for it, so any
+    authenticated caller could read any object by naming it. A presigned GET is
+    a bearer capability for one object — once minted, nothing further is checked
+    and anyone holding the URL can use it until it expires — which is what makes
+    the check belong *here*, before signing, rather than at the fetch.
+
+    `require_key_owned_by` also validates the key, which this path did not do
+    at all: an unvalidated key went straight into `Params`, so a key carrying
+    `..` or a control character was signed as readily as a well-formed one.
+    """
+    require_key_owned_by(key, owner_id)
+
     ttl = expiry if expiry is not None else settings.AWS_S3_PRESIGNED_URL_EXPIRY
 
     try:

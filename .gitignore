@@ -13,5 +13,10 @@ dist/
 htmlcov/
 .coverage
 
+# Redis writes its snapshot into the working directory, and running the suite
+# against a local server is what CLAUDE.md's gates ask for — so this appears in
+# the repository root for anybody who follows them.
+dump.rdb
+
 # macOS
 .DS_Store
