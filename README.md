@@ -368,6 +368,24 @@ request into a store every replica shares. Comparison is `hmac.compare_digest`
 over digests validated as hex first — without that, 64 accented characters are a
 500 rather than a rejected delivery.
 
+## OWASP API Security Top 10
+[docs/owasp-api-top-10.md](./docs/owasp-api-top-10.md) — the checklist, with
+every line naming the test that fails when that line stops holding, and each
+category stating what it does *not* cover. Two gates assert the document and
+`tests/test_owasp_api_top_10.py` have not drifted in either direction, because a
+citation to a deleted test is a false claim of coverage and a test nobody cites
+is a mitigation the next person has no reason to keep. Several are structural
+rather than behavioural — no route takes an object id from the client, every
+route either authenticates or is written down as public with its reason — so the
+route somebody adds next fails a build instead of quietly serving. Writing it
+found three mitigations missing, which is the argument for writing it: the
+presigned-download route required *a* user and signed whatever key it was given,
+making every object in the bucket readable by every account; login skipped argon2
+for unregistered addresses, which is a user-enumeration oracle worth ~75ms
+against ~0ms; and the login password was unbounded, which only became a cost once
+the second fix put argon2 on every attempt. The weak category is API6, and the
+document says so.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

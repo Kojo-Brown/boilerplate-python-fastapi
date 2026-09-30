@@ -14,7 +14,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Final, Protocol, runtime_checkable
 
-from src.exceptions import AppException, BadRequestError, NotFoundError
+from src.exceptions import (
+    AppException,
+    BadRequestError,
+    ForbiddenError,
+    NotFoundError,
+)
 
 ALLOWED_CONTENT_TYPES: Final[frozenset[str]] = frozenset(
     {
@@ -179,14 +184,70 @@ def validate_upload(*, content_type: str, size: int) -> None:
         )
 
 
-def build_object_key(folder: str, filename: str) -> str:
-    """Derive a collision-free key from a caller-supplied folder and filename.
+def owner_key_prefix(owner_id: uuid.UUID | str) -> str:
+    """The key namespace `owner_id`'s objects live in, `/`-terminated.
+
+    Object-level authorisation for this bucket is carried by the key itself.
+    There is no table recording who uploaded what, so a request naming a key is
+    the only thing an ownership check has to go on — and a check written against
+    a flat namespace has nothing to compare. Partitioning the namespace is what
+    makes `require_key_owned_by` answerable without a lookup: one `str` operation
+    against a prefix derived from the authenticated user, rather than a round
+    trip whose absence is exactly why this was unguarded before.
+
+    Terminated with `/` deliberately, and it is the whole correctness of the
+    prefix test below: without it, `users/<a>` prefixes `users/<ab>…`, so an
+    account whose id is a prefix of another's would read the other's objects.
+    Ids here are UUIDs, where that cannot arise — which is precisely why a
+    version of this function that dropped the slash would pass every test
+    anybody wrote with real ids and be wrong for any other id scheme.
+    """
+    return f"users/{owner_id}/"
+
+
+def build_object_key(folder: str, filename: str, *, owner_id: uuid.UUID | str) -> str:
+    """Derive a collision-free, owner-scoped key from caller-supplied parts.
 
     Only the extension is taken from `filename`; the stem is replaced by a
     UUID4 so a client cannot choose where its bytes land or overwrite another
     tenant's object by guessing a name.
+
+    `owner_id` is keyword-only and has no default. A default would be a way to
+    mint an unattributed key, and an unattributed key is one
+    `require_key_owned_by` can only refuse — so the absence of a default is what
+    keeps the two functions describing the same namespace.
     """
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     unique = str(uuid.uuid4())
-    key = posixpath.join(folder, f"{unique}.{ext}" if ext else unique)
+    key = posixpath.join(
+        owner_key_prefix(owner_id).rstrip("/"),
+        folder,
+        f"{unique}.{ext}" if ext else unique,
+    )
     return validate_object_key(key)
+
+
+def require_key_owned_by(key: str, owner_id: uuid.UUID | str) -> str:
+    """Return `key` if it lies in `owner_id`'s namespace, else raise.
+
+    Validation runs first, and the order is load-bearing rather than tidy:
+    `validate_object_key` is what forbids `..` segments, so the prefix test
+    below cannot be walked out of afterwards. A `startswith` check over an
+    unvalidated key would admit `users/<victim>/../<attacker>/x` — which names
+    the attacker's own prefix and resolves somewhere else entirely.
+
+    Raises:
+        BadRequestError: `key` is not a well-formed object key.
+        ForbiddenError: `key` is well-formed but belongs to another account.
+    """
+    validate_object_key(key)
+
+    if not key.startswith(owner_key_prefix(owner_id)):
+        # 403 rather than 404, and it says nothing about whether the object is
+        # there. Probing for existence is what a 404/403 split would offer, and
+        # this check runs before anything has looked: the answer is the same for
+        # a key that exists, a key that never did, and a key in a prefix nobody
+        # has ever written to.
+        raise ForbiddenError("Object key does not belong to the authenticated user.")
+
+    return key

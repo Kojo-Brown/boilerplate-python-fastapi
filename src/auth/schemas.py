@@ -24,10 +24,25 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
+    """Credentials presented at `/auth/login`.
+
+    `password` is bounded, and it did not used to be. Every login now reaches
+    argon2 — that is what closes the enumeration oracle in `AuthService.login` —
+    and argon2 hashes the password it is given, so an unbounded field makes the
+    body length of an *unauthenticated* request a multiplier on this process's
+    CPU cost. The bound is `RegisterRequest`'s, because a longer password is one
+    no account can have: a value over it cannot be a credential this API ever
+    issued, so refusing it costs a legitimate caller nothing.
+
+    422 rather than 401 for an over-long value, which leaks nothing an attacker
+    does not already have — the limit is in the published OpenAPI schema, and the
+    answer does not depend on whether the address exists.
+    """
+
     model_config = ConfigDict(frozen=True)
 
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class RefreshRequest(BaseModel):

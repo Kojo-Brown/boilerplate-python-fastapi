@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +12,7 @@ from src.storage.base import (
     MAX_FILE_SIZE_BYTES,
     StorageError,
     build_object_key,
+    owner_key_prefix,
 )
 from src.storage.s3 import (
     delete_s3_object,
@@ -23,26 +25,31 @@ from src.storage.schemas import (
     PresignedUploadResponse,
 )
 
+# A stable owner for the tests below. Object keys are owner-scoped, so every
+# call that mints or names one has to say whose it is.
+OWNER = uuid.UUID("11111111-1111-4111-8111-111111111111")
+PREFIX = owner_key_prefix(OWNER)
+
 # --- build_object_key ---
 
 
 def test_build_object_key_includes_extension() -> None:
-    key = build_object_key("uploads", "photo.jpg")
-    assert key.startswith("uploads/")
+    key = build_object_key("uploads", "photo.jpg", owner_id=OWNER)
+    assert key.startswith(f"{PREFIX}uploads/")
     assert key.endswith(".jpg")
-    uuid_part = key[len("uploads/") :].rsplit(".", 1)[0]
+    uuid_part = key[len(f"{PREFIX}uploads/") :].rsplit(".", 1)[0]
     assert len(uuid_part) == 36
 
 
 def test_build_object_key_without_extension() -> None:
-    key = build_object_key("docs", "myfile")
-    assert key.startswith("docs/")
-    assert "." not in key.split("/")[1]
+    key = build_object_key("docs", "myfile", owner_id=OWNER)
+    assert key.startswith(f"{PREFIX}docs/")
+    assert "." not in key.rsplit("/", 1)[1]
 
 
 def test_build_object_key_is_unique() -> None:
-    first = build_object_key("uploads", "same.jpg")
-    second = build_object_key("uploads", "same.jpg")
+    first = build_object_key("uploads", "same.jpg", owner_id=OWNER)
+    second = build_object_key("uploads", "same.jpg", owner_id=OWNER)
     assert first != second
 
 
@@ -55,6 +62,7 @@ def test_generate_presigned_upload_disallowed_type() -> None:
             folder="uploads",
             filename="virus.exe",
             content_type="application/octet-stream",
+            owner_id=OWNER,
         )
 
 
@@ -71,12 +79,13 @@ def test_generate_presigned_upload_success(mock_get_client: MagicMock) -> None:
         folder="uploads",
         filename="photo.jpg",
         content_type="image/jpeg",
+        owner_id=OWNER,
         expiry=600,
     )
 
     assert result["url"] == "https://s3.example.com/upload"
     assert result["expires_in"] == 600
-    assert result["key"].startswith("uploads/")
+    assert result["key"].startswith(f"{PREFIX}uploads/")
     call_kwargs = mock_client.generate_presigned_post.call_args[1]
     assert call_kwargs["ExpiresIn"] == 600
     assert call_kwargs["Fields"] == {"Content-Type": "image/jpeg"}
@@ -100,6 +109,7 @@ def test_generate_presigned_upload_uses_default_expiry(
         folder="uploads",
         filename="doc.pdf",
         content_type="application/pdf",
+        owner_id=OWNER,
     )
 
     assert result["expires_in"] == settings.AWS_S3_PRESIGNED_URL_EXPIRY
@@ -121,6 +131,7 @@ def test_generate_presigned_upload_client_error_raises_storage_error(
             folder="uploads",
             filename="photo.jpg",
             content_type="image/jpeg",
+            owner_id=OWNER,
         )
 
 
@@ -135,14 +146,16 @@ def test_generate_presigned_download_success(mock_get_client: MagicMock) -> None
         "https://s3.example.com/file?sig=abc"
     )
 
-    result = generate_presigned_download(key="uploads/abc.jpg", expiry=300)
+    result = generate_presigned_download(
+        key=f"{PREFIX}uploads/abc.jpg", owner_id=OWNER, expiry=300
+    )
 
     assert result["url"] == "https://s3.example.com/file?sig=abc"
     assert result["expires_in"] == 300
     call_args = mock_client.generate_presigned_url.call_args
     assert call_args[0][0] == "get_object"
     assert call_args[1]["ExpiresIn"] == 300
-    assert call_args[1]["Params"]["Key"] == "uploads/abc.jpg"
+    assert call_args[1]["Params"]["Key"] == f"{PREFIX}uploads/abc.jpg"
 
 
 @patch("src.storage.s3._get_s3_client")
@@ -156,7 +169,7 @@ def test_generate_presigned_download_client_error_raises_storage_error(
     )
 
     with pytest.raises(StorageError, match="Failed to generate presigned download URL"):
-        generate_presigned_download(key="missing/file.jpg")
+        generate_presigned_download(key=f"{PREFIX}missing/file.jpg", owner_id=OWNER)
 
 
 # --- delete_s3_object ---

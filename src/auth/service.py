@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import NoReturn
 
+from src.auth.password import decoy_hash
 from src.auth.schemas import RegisterRequest, TokenResponse, UserResponse
 from src.auth.utils import (
     create_access_token,
@@ -97,13 +98,33 @@ class AuthService:
         return UserResponse.model_validate(user)
 
     async def login(self, email: str, password: str) -> TokenResponse:
+        """Exchange a password for a token pair, or refuse indistinguishably.
+
+        The branch structure is the mitigation. `or` short-circuits, so the
+        obvious spelling of this check —
+        `user is None or ... or not verify_password(...)` — never reaches the
+        hasher for an address nobody has registered, and answers three orders of
+        magnitude sooner than the same request against an address that exists.
+        That difference is a user-enumeration oracle readable from one timed
+        request, and no amount of returning the same message closes it.
+
+        So the absent and password-less branches spend the same argon2 verify the
+        present branch spends, against `decoy_hash()`, and the result is
+        discarded because it is always `False`. The wasted work *is* the
+        behaviour; see `src/auth/password.py`.
+        """
         user = await self.users.get_by_email(email)
 
-        if (
-            user is None
-            or user.hashed_password is None
-            or not verify_password(password, user.hashed_password)
-        ):
+        if user is None or user.hashed_password is None:
+            # Not an optimisation to remove later: this is the branch that has
+            # no hash of its own, spending what the other branch spends so the
+            # two cannot be told apart by a clock. An OAuth-only account reaches
+            # here too, and for the same reason must not be distinguishable from
+            # an address that was never registered.
+            verify_password(password, decoy_hash())
+            raise UnauthorizedError("Invalid credentials")
+
+        if not verify_password(password, user.hashed_password):
             raise UnauthorizedError("Invalid credentials")
 
         if not user.is_active:

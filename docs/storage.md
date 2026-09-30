@@ -47,9 +47,19 @@ segment starting with a letter or digit and otherwise limited to letters,
 digits, `.`, `-` and `_`, at most 1024 characters. That is the intersection of
 what S3 accepts and what is safe to append to a local root — `..`, absolute
 paths, backslashes and NUL are rejected with a 400 rather than being silently
-rewritten. Use `build_object_key(folder, filename)` to derive a key from
-user input; it keeps only the extension and replaces the stem with a UUID4, so
-a client cannot choose where its bytes land.
+rewritten. Use `build_object_key(folder, filename, owner_id=...)` to derive a
+key from user input; it keeps only the extension and replaces the stem with a
+UUID4, so a client cannot choose where its bytes land.
+
+Keys are also **owner-scoped**: `build_object_key` places them under
+`owner_key_prefix(owner_id)` — `users/<id>/` — and `require_key_owned_by`
+refuses a key outside a given account's prefix with a 403. That prefix is the
+only record of who owns an object; there is no uploads table, so a route handed
+a key has nothing else to authorise against. `/api/v1/uploads/presigned-download`
+is the caller of that check, and it needs it: a presigned GET is a bearer
+capability for one object, honoured by S3 without consulting this application
+again, so the decision has to be complete before the URL is returned. See
+`docs/owasp-api-top-10.md` (API1).
 
 ### What the protocol deliberately leaves out
 
