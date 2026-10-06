@@ -43,6 +43,7 @@ from src.observability import (
 from src.outbox.factory import get_outbox_relay
 from src.parallel.factory import get_cpu_pool
 from src.sse.hub import event_stream_hub
+from src.tenancy import TenantContextMiddleware
 from src.webhooks.factory import close_replay_guard
 from src.ws.rooms import room_registry
 
@@ -177,6 +178,17 @@ app.add_middleware(
         fail_open=settings.IDEMPOTENCY_FAIL_OPEN,
         enabled=settings.IDEMPOTENCY_ENABLED,
     ),
+)
+# Added after IdempotencyMiddleware and therefore *outside* it, which is the
+# order the cache needs: a replayed response was stored under a key belonging
+# to one tenant, and looking it up before the tenant is known would serve it
+# to whoever presents the key. Added before RequestIDMiddleware and therefore
+# inside it, so a tenant refusal is logged with a request id and leaves with
+# an X-Request-ID like every other response. See src/tenancy/middleware.py.
+app.add_middleware(
+    TenantContextMiddleware,
+    header_name=settings.TENANCY_HEADER,
+    trust_header=settings.TENANCY_TRUST_HEADER,
 )
 app.add_middleware(RequestIDMiddleware)
 # Added last and therefore outermost, which is what makes the policy a property

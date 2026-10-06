@@ -13,6 +13,7 @@ import factory
 from faker import Faker
 
 from src.models.refresh_token import RefreshToken
+from src.models.tenant import DEFAULT_TENANT_ID
 from src.models.user import User
 
 _fake = Faker()
@@ -23,6 +24,13 @@ class UserFactory(factory.Factory):
         model = User
 
     id = factory.LazyFunction(uuid.uuid4)
+    # Set explicitly rather than left to the column default, which is a
+    # *server* default: a factory-built user never reaches an INSERT in most
+    # of these tests, so `tenant_id` would be `None` on an object the code
+    # under test reads it from — `AuthService.login` puts it in the token.
+    # The bootstrap tenant, which is the one `tests/conftest.py` scopes the
+    # whole suite to, so a factory user and a persisted one agree.
+    tenant_id = DEFAULT_TENANT_ID
     email = factory.Sequence(lambda n: f"user{n}@example.com")
     hashed_password = factory.LazyFunction(lambda: _fake.password(length=60))
     is_active = True
@@ -67,6 +75,7 @@ class RefreshTokenFactory(factory.Factory):
         model = RefreshToken
 
     id = factory.LazyFunction(uuid.uuid4)
+    tenant_id = DEFAULT_TENANT_ID
     token = factory.LazyFunction(lambda: _fake.sha256())
     user_id = factory.LazyFunction(uuid.uuid4)
     # A fresh family per built token, which is what a login produces. A test

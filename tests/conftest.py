@@ -58,6 +58,7 @@ import pytest
 import structlog
 from httpx import ASGITransport, AsyncClient
 from pytest_factoryboy import register
+from sqlalchemy import Engine
 from structlog.testing import LogCapture
 from structlog.typing import EventDict
 
@@ -67,7 +68,9 @@ from src.auth.utils import create_access_token
 from src.database import get_db
 from src.dependencies import get_auth_service
 from src.main import app
+from src.models.tenant import DEFAULT_TENANT_ID
 from src.models.user import User
+from src.tenancy import bind_tenant_on_begin, tenant_scope
 from src.worker import celery_app as _celery_app
 from tests.factories import AdminUserFactory, RefreshTokenFactory, UserFactory
 from tests.fakes import (
@@ -89,6 +92,34 @@ __all__ = ["apply_column_defaults"]
 register(UserFactory)
 register(AdminUserFactory, "admin_user")
 register(RefreshTokenFactory)
+
+# Every engine in this process, not just `src.database.engine`. The DB-backed
+# tests each build their own with `create_async_engine`, and an engine without
+# this listener opens transactions with no tenant bound — under which
+# `users.tenant_id` has no value for its `app_current_tenant_id()` default and
+# every insert fails a not-null constraint. Registering on the class is also
+# the honest statement of what the suite assumes: *all* work in this process
+# happens inside a tenant.
+bind_tenant_on_begin(Engine)
+
+
+@pytest.fixture(autouse=True)
+def default_tenant() -> Iterator[None]:
+    """Run every test inside the bootstrap tenant.
+
+    Deliberately a plain (non-async) fixture. `asyncio` copies the context
+    when it creates the task that runs the test, so a variable set here is
+    visible inside it; set from an *async* fixture it would be set in that
+    fixture's own task and invisible to the test's.
+
+    The tenant is the one migration 0008 backfills and `Tenant.__table__`'s
+    `after_create` hook seeds, so the foreign keys resolve against a row that
+    exists however the schema was built. Tests that need a second tenant — the
+    isolation tests in `tests/test_tenancy_db.py` — nest their own
+    `tenant_scope` inside this one.
+    """
+    with tenant_scope(DEFAULT_TENANT_ID):
+        yield
 
 
 @pytest.fixture(autouse=True)

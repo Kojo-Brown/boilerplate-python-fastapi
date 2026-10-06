@@ -38,6 +38,7 @@ from src.main import app
 from src.models.user import User
 from src.repositories.user import UserRepository
 from src.streaming.ndjson import TERMINAL_KEY
+from src.tenancy.sql import TENANT_SETTING
 from src.users.export import UserExportRecord
 
 ENDPOINT = "/api/v1/exports/users"
@@ -102,6 +103,12 @@ def _capture_sql(engine: AsyncEngine) -> list[str]:
 
     Registered on the sync engine because that is where SQLAlchemy's execution
     events live; the async facade is a wrapper around it.
+
+    The tenant binding (`src/tenancy/binding.py`) is skipped for the same
+    reason `tests/querycount.py` keeps it out of its statement list: it is one
+    statement per transaction regardless of what the block does, so counting
+    it here would turn "the export is one cursor" into "the export is one
+    cursor plus a constant" and say nothing more.
     """
     statements: list[str] = []
 
@@ -114,6 +121,8 @@ def _capture_sql(engine: AsyncEngine) -> list[str]:
         context: Any,
         executemany: bool,
     ) -> None:
+        if TENANT_SETTING in statement:
+            return
         statements.append(statement)
 
     return statements

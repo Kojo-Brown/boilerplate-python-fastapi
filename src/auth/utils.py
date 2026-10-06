@@ -34,15 +34,31 @@ __all__ = [
 ]
 
 
-def create_access_token(user_id: str, email: str, role: str) -> str:
+def create_access_token(
+    user_id: str,
+    email: str,
+    role: str,
+    tenant_id: uuid.UUID | str | None = None,
+) -> str:
+    """Mint an access token.
+
+    `tenant_id` is the `tid` claim, and it is what makes the token the
+    authoritative answer to "which tenant is this request in" — see
+    `src/tenancy/resolver.py`. Optional rather than required so that a caller
+    with nothing to say about tenancy (a single-tenant deployment, a test of
+    the claim checks themselves) does not have to invent one; a token without
+    it resolves no tenant and falls back to the header.
+    """
     expire = datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {
+    payload: dict[str, object] = {
         "sub": user_id,
         "email": email,
         "role": role,
         "type": "access",
         "exp": expire,
     }
+    if tenant_id is not None:
+        payload["tid"] = str(tenant_id)
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
@@ -90,6 +106,12 @@ class AccessTokenClaims:
         email: The `email` claim, or `""` when the token predates it. Not
             authoritative: the row is.
         role: The `role` claim, on the same terms.
+        tenant_id: The `tid` claim, parsed as the tenant it names, or `None`
+            for a token minted before tenancy existed or by a deployment that
+            does not use it. Unlike `email` and `role` this one *is*
+            authoritative: it is read before the request is authenticated, by
+            `src/tenancy/resolver.py`, precisely because the row it would be
+            checked against cannot be found until a tenant is bound.
         expires_at: The `exp` claim as an aware UTC datetime.
 
             This is the field the WebSocket endpoint exists to read. A request
@@ -104,6 +126,7 @@ class AccessTokenClaims:
     email: str
     role: str
     expires_at: datetime
+    tenant_id: uuid.UUID | None = None
 
 
 def verify_access_token(token: str) -> AccessTokenClaims:
@@ -145,6 +168,22 @@ def verify_access_token(token: str) -> AccessTokenClaims:
         # report that as an ordinary session timeout.
         raise InvalidAccessTokenError("Token has no expiry")
 
+    raw_tenant = payload.get("tid")
+    tenant_id: uuid.UUID | None = None
+    if raw_tenant is not None:
+        # Refused rather than ignored. A `tid` that will not parse is a token
+        # this API signed and cannot route; treating it as absent would fall
+        # back to the caller-supplied header, which is the one case where a
+        # malformed claim would *widen* what the request can reach.
+        if not isinstance(raw_tenant, str):
+            raise InvalidAccessTokenError("Token tenant is not a valid tenant id")
+        try:
+            tenant_id = uuid.UUID(raw_tenant)
+        except ValueError as exc:
+            raise InvalidAccessTokenError(
+                "Token tenant is not a valid tenant id"
+            ) from exc
+
     email = payload.get("email")
     role = payload.get("role")
     return AccessTokenClaims(
@@ -152,4 +191,5 @@ def verify_access_token(token: str) -> AccessTokenClaims:
         email=email if isinstance(email, str) else "",
         role=role if isinstance(role, str) else "",
         expires_at=datetime.fromtimestamp(raw_expiry, tz=UTC),
+        tenant_id=tenant_id,
     )
