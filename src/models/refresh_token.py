@@ -2,10 +2,14 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, get_args
 
-from sqlalchemy import UUID, Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import UUID, Boolean, DateTime, ForeignKey, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database import Base
+
+# Same reason as in `src/models/user.py`: the foreign key below is resolved by
+# name against `Base.metadata`, so the table it names has to be registered.
+from src.models.tenant import Tenant  # noqa: F401
 
 if TYPE_CHECKING:
     from src.models.user import User
@@ -59,6 +63,26 @@ class RefreshToken(Base):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    #: The tenant this token was issued in. Denormalised from `users` rather
+    #: than reached through `user_id`, and the reason is that a policy which
+    #: joins is a policy that runs a subquery on every row of every statement
+    #: against this table — including the `DELETE` that sweeps expired tokens.
+    #: A column comparison is an index lookup; `EXISTS (SELECT 1 FROM users
+    #: ...)` is not, and it is also circular, because reading `users` from
+    #: inside a policy is itself subject to the policy on `users`.
+    #:
+    #: The denormalisation cannot drift: `WITH CHECK` on both tables forces
+    #: every insert here and every insert there to the connection's bound
+    #: tenant, so a token can only be written into the tenant its user was
+    #: written into. A user cannot change tenant, because an `UPDATE` moving
+    #: one would have to pass the same `WITH CHECK`.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=text("app_current_tenant_id()"),
+        index=True,
     )
     #: The authorization grant this token descends from. Set to a fresh UUID by
     #: the login that opened the session and copied unchanged by every rotation

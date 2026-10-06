@@ -331,7 +331,15 @@ class AuthService:
         family revokes too little on reuse, where an unexpectedly *shared* one
         would revoke sessions belonging to a different login.
         """
-        access_token = create_access_token(str(user.id), user.email, user.role)
+        # The tenant comes off the row rather than out of the request's
+        # context, and the difference matters: under row-level security this
+        # row could not have been read from any other tenant, so `user
+        # .tenant_id` is the one value that is true by construction. Reading
+        # the ambient tenant instead would mint a token for whatever the
+        # caller asked to be, which is the same value right up until it is not.
+        access_token = create_access_token(
+            str(user.id), user.email, user.role, user.tenant_id
+        )
 
         jti = str(uuid.uuid4())
         refresh_token_str, expires_at = create_refresh_token(str(user.id), jti)

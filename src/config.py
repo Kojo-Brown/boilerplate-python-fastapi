@@ -659,5 +659,30 @@ class Settings(BaseSettings):
     # a month later, that it was never set back.
     LOG_REDACTION_EXTRA_KEYS: str = ""
 
+    # Multi-tenancy (see src/tenancy/, docs/multi-tenancy.md).
+    #
+    # The header an unauthenticated request names its tenant in. Configurable
+    # because the name is a contract with whatever sits in front of this
+    # application — a proxy that maps a hostname to a tenant has usually
+    # already chosen one.
+    #
+    # There is deliberately no setting that turns tenancy *off*. The boundary
+    # is row-level security in the database, not a branch in this process, so
+    # a flag here could not disable it; all it could do is stop binding the
+    # tenant, which under the policies means every query returns nothing. A
+    # single-tenant deployment runs with one tenant row, not with the feature
+    # switched off.
+    TENANCY_HEADER: str = "X-Tenant-ID"
+    # Whether an *unauthenticated* request may name its tenant in that header.
+    #
+    # On by default because login has to work: finding a user by email is
+    # itself a tenant-scoped read, so a deployment with no other way to route
+    # cannot authenticate anybody without it. Turn it off where the tenant is
+    # derived some other way — a per-tenant hostname terminated at the proxy,
+    # which then sets the header itself on an internal hop the client cannot
+    # reach. It does not make the header a credential either way: see
+    # src/tenancy/resolver.py.
+    TENANCY_TRUST_HEADER: bool = True
+
 
 settings: Final[Settings] = Settings()

@@ -386,6 +386,32 @@ against ~0ms; and the login password was unbounded, which only became a cost onc
 the second fix put argon2 on every attempt. The weak category is API6, and the
 document says so.
 
+## Multi-tenancy
+[docs/multi-tenancy.md](./docs/multi-tenancy.md) — one database, a `tenant_id`
+on every tenant-scoped table and a PostgreSQL row-level security policy
+comparing it against a per-transaction setting, so application code writes no
+tenant filters at all: a filter written four hundred times is one forgotten
+once, and the one that is forgotten returns another customer's rows rather
+than an error. The tenant is bound on SQLAlchemy's `begin` event, not once per
+request — `set_config(…, is_local => true)` ends at `COMMIT`, so a session that
+commits mid-request would otherwise carry on unbound and silently read nothing;
+and `is_local` is itself the difference between isolation and handing the next
+request on a pooled connection the previous tenant's setting. The tenant
+travels as a bound parameter because `SET LOCAL` cannot take one, which would
+mean interpolating a header value into SQL. An unauthenticated request names
+its tenant in a header, because finding a user by email at login is itself a
+tenant-scoped read; the header is routing, not a credential, and a header that
+disagrees with the token's `tid` is a 403 rather than a silent preference for
+the token. Email uniqueness moved to `(tenant_id, email)`: a global index both
+reserves an address across customers and announces, by failing on a row the
+caller cannot see, that it is taken. The part worth checking is the role —
+a superuser, `BYPASSRLS`, or a table owner without `FORCE ROW LEVEL SECURITY`
+bypasses every policy, silently, which is what running migrations and the
+application as one user gives you — so `scripts/check_tenant_isolation.py`
+asks a live database rather than its configuration, and the tests connect as a
+purpose-made unprivileged role because CI's own credentials would bypass the
+thing under test.
+
 ## SOLID audit
 [docs/solid.md](./docs/solid.md) — the audit of `src/` against each principle,
 the refactors it produced, the findings it deferred to later spec items and how

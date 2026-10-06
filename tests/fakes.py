@@ -26,15 +26,31 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import ColumnDefault, DateTime
+from sqlalchemy import Column, ColumnDefault, DateTime, DefaultClause
 from sqlalchemy.orm import class_mapper
 
 from src.events.base import DomainEvent
 from src.health.base import Criticality
 from src.models.refresh_token import RefreshToken, RevocationReason
 from src.models.user import User
+from src.tenancy.context import current_tenant_id
+from src.tenancy.sql import CURRENT_TENANT_FUNCTION
+
+
+def _defaults_to_current_tenant(column: Column[Any]) -> bool:
+    """Is this column's server default the tenant-from-the-connection call?
+
+    Matched on the rendered SQL rather than on the column name, so a second
+    tenant-scoped table added later is covered without editing this file, and
+    a column that merely happens to be called `tenant_id` without the default
+    is not.
+    """
+    server_default = column.server_default
+    if not isinstance(server_default, DefaultClause):
+        return False
+    return CURRENT_TENANT_FUNCTION in str(server_default.arg)
 
 
 def apply_column_defaults(instance: object) -> None:
@@ -66,6 +82,15 @@ def apply_column_defaults(instance: object) -> None:
                     setattr(instance, key, default.arg)
         elif column.server_default is not None and isinstance(column.type, DateTime):
             setattr(instance, key, datetime.now(UTC))
+        elif _defaults_to_current_tenant(column):
+            # `tenant_id` has a server default of `app_current_tenant_id()`,
+            # which reads the connection's bound tenant. The fakes have no
+            # connection, so the same value is taken from the context the
+            # binding would have sent — which is what makes a user built here
+            # carry the tenant that one built by a real INSERT would, and
+            # therefore what makes `AuthService.login` mint the same `tid`
+            # claim against a fake store as against the database.
+            setattr(instance, key, current_tenant_id())
 
 
 class InMemoryUserStore:

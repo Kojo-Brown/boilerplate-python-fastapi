@@ -33,6 +33,16 @@ traversal and says which attribute, which a statement count cannot tell you.
 about because every iteration is an ordinary top-level query. Neither subsumes
 the other, and `assert_no_n_plus_one` runs both.
 
+**What is not counted.** The one statement `src/tenancy/binding.py` sends at
+the start of every transaction — `set_config('app.tenant_id', …)` — is
+recorded as `QueryLog.tenant_bindings` and kept out of `statements`. It is
+infrastructure rather than a query: it is sent exactly once per transaction
+whatever the code inside does, so counting it would add a constant to every
+assertion in `tests/test_n_plus_one.py` without ever varying with the row
+count those tests exist to measure. It is kept rather than discarded because
+"once per transaction" is itself a claim worth asserting, and
+`tests/test_tenancy_db.py` asserts it from this field.
+
 **Scope.** The listener attaches to the *engine* behind the session, so it sees
 every statement that engine sends while the block is open, including any from
 another session sharing it. That is deliberate — resolving a statement back to
@@ -56,12 +66,21 @@ from sqlalchemy.engine import Connection, ExecutionContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import ORMExecuteState
 
+from src.tenancy.sql import TENANT_SETTING
+
 #: How much of a statement is shown in a failure message. Long enough that the
 #: table and the first columns are visible, short enough that ten of them are
 #: still readable in pytest output.
 EXCERPT_LENGTH = 120
 
 _WHITESPACE = re.compile(r"\s+")
+
+#: Matches the tenant binding whatever the driver's parameter style renders
+#: the value as — asyncpg sends `$1`, psycopg `%(tenant_id)s`. Anchored on the
+#: function and the setting name, which are the parts that identify it.
+_TENANT_BINDING = re.compile(
+    rf"set_config\(\s*'{re.escape(TENANT_SETTING)}'", re.IGNORECASE
+)
 
 
 def _excerpt(sql: str) -> str:
@@ -134,6 +153,11 @@ class QueryLog:
     statements: list[Statement] = field(default_factory=list)
     relationship_loads: list[RelationshipLoad] = field(default_factory=list)
 
+    #: How many times the tenant was bound — once per transaction opened
+    #: inside the block. Kept out of `statements` for the reason in the module
+    #: docstring, and exposed so that it can be asserted on directly.
+    tenant_bindings: int = 0
+
     def __len__(self) -> int:
         """The number of round trips — the number to assert on."""
         return len(self.statements)
@@ -174,7 +198,8 @@ class QueryLog:
         lines = [
             f"{len(self.statements)} statement(s), "
             f"{self.parameter_sets} parameter set(s), "
-            f"{len(self.lazy_loads)} lazy relationship load(s)"
+            f"{len(self.lazy_loads)} lazy relationship load(s), "
+            f"{self.tenant_bindings} tenant binding(s)"
         ]
         lines += [
             f"  {count}x {_excerpt(shape)}"
@@ -232,6 +257,9 @@ def capture_queries(session: AsyncSession) -> Iterator[QueryLog]:
         context: ExecutionContext | None,
         executemany: bool,
     ) -> None:
+        if _TENANT_BINDING.search(statement):
+            log.tenant_bindings += 1
+            return
         sets = len(parameters) if executemany and parameters is not None else 1
         log.statements.append(
             Statement(sql=statement, parameter_sets=sets, executemany=executemany)
