@@ -123,6 +123,25 @@ async def client() -> AsyncGenerator[Redis]:
     await connection.aclose()
 
 
+@pytest.fixture
+async def decoding_backend(namespace: str) -> AsyncGenerator[RedisLockBackend]:
+    """A backend over a client built with `decode_responses=True`.
+
+    Guarded and torn down exactly like `backend`, rather than built inline in
+    the one test that needs it. That inline construction is how this file's
+    only server-dependent test ended up without a skip: the guard lives in the
+    fixtures, so a test that brings its own client silently opts out of it.
+    """
+    if not redis_reachable():
+        pytest.skip(REDIS_SKIP_REASON)
+    built = RedisLockBackend(
+        Redis.from_url(REDIS_URL, decode_responses=True), namespace=namespace
+    )
+    yield built
+    # `close()` closes the client it was handed, owned or injected alike.
+    await built.close()
+
+
 class TestKeyLayout:
     async def test_the_lock_key_carries_the_token_and_owner(
         self, backend: RedisLockBackend, client: Redis, namespace: str
@@ -179,7 +198,7 @@ class TestKeyLayout:
             await second.close()
 
     async def test_an_injected_decoding_client_still_works(
-        self, namespace: str
+        self, decoding_backend: RedisLockBackend
     ) -> None:
         """`from_url` turns decoding off, but the constructor takes any client.
 
@@ -188,20 +207,16 @@ class TestKeyLayout:
         arrive as `str` rather than `bytes`. Parsing one and not the other would
         be an `AttributeError` on somebody's first acquisition.
         """
-        built = RedisLockBackend(
-            Redis.from_url(REDIS_URL, decode_responses=True), namespace=namespace
+        lease = await decoding_backend.acquire(
+            "decoded", owner="worker-1", ttl_seconds=30
         )
-        try:
-            lease = await built.acquire("decoded", owner="worker-1", ttl_seconds=30)
-            assert lease is not None
-            assert lease.token == 1
+        assert lease is not None
+        assert lease.token == 1
 
-            state = await built.inspect("decoded")
-            assert state is not None
-            assert state.owner == "worker-1"
-            assert await built.release(lease) is ReleaseOutcome.RELEASED
-        finally:
-            await built.close()
+        state = await decoding_backend.inspect("decoded")
+        assert state is not None
+        assert state.owner == "worker-1"
+        assert await decoding_backend.release(lease) is ReleaseOutcome.RELEASED
 
 
 class TestForeignValues:
