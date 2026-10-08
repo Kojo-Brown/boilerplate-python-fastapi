@@ -185,8 +185,12 @@ class IfMatch:
             )
 
 
-def _parse_tag_list(raw: str) -> tuple[EntityTag, ...]:
+def _parse_tag_list(raw: str, *, field: str = "If-Match") -> tuple[EntityTag, ...]:
     """Scan `#entity-tag`, raising `MalformedPreconditionError` on anything else.
+
+    `field` is the header name the message should blame. Two headers share this
+    grammar, and a 400 that names the wrong one sends a client to read the
+    wrong half of its own code.
 
     Empty list elements are skipped rather than rejected: RFC 9110 §5.6.1.2
     requires recipients to tolerate them, and they come from clients that build
@@ -208,7 +212,7 @@ def _parse_tag_list(raw: str) -> tuple[EntityTag, ...]:
         match = _ENTITY_TAG.match(raw, pos)
         if match is None:
             raise MalformedPreconditionError(
-                f"If-Match is not a valid entity-tag list at offset {pos}: {raw!r}"
+                f"{field} is not a valid entity-tag list at offset {pos}: {raw!r}"
             )
         tags.append(EntityTag(match.group(2), weak=match.group(1) is not None))
         pos = match.end()
@@ -218,7 +222,7 @@ def _parse_tag_list(raw: str) -> tuple[EntityTag, ...]:
         if pos < length:
             if raw[pos] != ",":
                 raise MalformedPreconditionError(
-                    f"If-Match entity tags must be comma-separated: {raw!r}"
+                    f"{field} entity tags must be comma-separated: {raw!r}"
                 )
             pos += 1
 

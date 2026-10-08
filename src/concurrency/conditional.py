@@ -67,7 +67,7 @@ class IfNoneMatch:
         if raw.strip(_OWS) == "*":
             return cls(present=True, wildcard=True)
 
-        tags = _parse_tag_list(raw)
+        tags = _parse_tag_list(raw, field="If-None-Match")
         if not tags:
             raise MalformedPreconditionError(
                 "If-None-Match must be '*' or a non-empty list of entity tags"
