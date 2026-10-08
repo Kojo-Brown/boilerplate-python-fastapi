@@ -83,6 +83,10 @@ class EntityTag:
         """RFC 9110 §8.8.3.2 strong comparison: both strong, values equal."""
         return not self.weak and not other.weak and self.value == other.value
 
+    def weakly_matches(self, other: EntityTag) -> bool:
+        """RFC 9110 §8.8.3.2 weak comparison: values equal, weakness ignored."""
+        raise NotImplementedError
+
 
 def resource_version_tag(resource_id: object, version: int) -> EntityTag:
     """Build the strong tag for a versioned row.
