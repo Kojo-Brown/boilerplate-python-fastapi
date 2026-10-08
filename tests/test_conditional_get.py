@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.concurrency import EntityTag, MalformedPreconditionError
+from src.concurrency import EntityTag, IfMatch, MalformedPreconditionError
 from src.concurrency.conditional import ConditionalOutcome, IfNoneMatch
 from src.exceptions import PreconditionFailedError
 
@@ -188,3 +188,32 @@ class TestEvaluation:
         """
         with pytest.raises(PreconditionFailedError):
             IfNoneMatch.parse('"7"').evaluate(EntityTag("7"), method="get")
+
+
+class TestMalformedFieldMessages:
+    """The 400 has to name the header the client actually sent.
+
+    Both fields are scanned by the same code, and that code was written when
+    `If-Match` was the only caller, so its messages say `If-Match`. A client
+    debugging its `If-None-Match` is then told that a header it did not send is
+    invalid — which sends it to read the wrong half of its own code, and is
+    worse than a message with no header name in it at all.
+    """
+
+    def test_the_grammar_error_names_if_none_match(self) -> None:
+        with pytest.raises(MalformedPreconditionError, match="If-None-Match"):
+            IfNoneMatch.parse("notatag")
+
+    def test_the_separator_error_names_if_none_match(self) -> None:
+        with pytest.raises(MalformedPreconditionError, match="If-None-Match"):
+            IfNoneMatch.parse('"7" "8"')
+
+    def test_if_match_still_names_itself(self) -> None:
+        """The fix must not swap one wrong header name for another."""
+        with pytest.raises(MalformedPreconditionError, match="If-Match"):
+            IfMatch.parse("notatag")
+
+    def test_the_message_still_quotes_the_offending_value(self) -> None:
+        """Naming the header is not a reason to stop saying what was wrong."""
+        with pytest.raises(MalformedPreconditionError, match="notatag"):
+            IfNoneMatch.parse("notatag")
