@@ -56,10 +56,17 @@ class TestReadProfile:
     async def test_forbids_shared_caching(
         self, authenticated_client: AsyncClient
     ) -> None:
-        """One URI, a different resource per token: no shared cache may keep it."""
+        """One URI, a different resource per token: no shared cache may keep it.
+
+        `private` is the directive that says so, and it is unchanged. This
+        assertion read `private, no-store` until conditional reads existed —
+        see `TestConditionalRead.test_the_read_permits_revalidation` for why
+        the second directive had to give.
+        """
         response = await authenticated_client.get(ENDPOINT)
 
-        assert response.headers["cache-control"] == "private, no-store"
+        assert "private" in response.headers["cache-control"]
+        assert response.headers["cache-control"] == "private, no-cache"
 
     async def test_requires_authentication(self, async_client: AsyncClient) -> None:
         assert (await async_client.get(ENDPOINT)).status_code == 401
@@ -93,7 +100,7 @@ class TestConditionalUpdate:
         )
 
         assert response.headers["etag"] == tag_for(mock_user)
-        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["cache-control"] == "private, no-cache"
 
     async def test_wildcard_is_accepted(
         self, authenticated_client: AsyncClient, mock_db: AsyncMock
@@ -353,3 +360,231 @@ class TestRequestValidation:
         )
 
         assert response.status_code == 401
+
+
+class TestConditionalRead:
+    """`If-None-Match` on the read, which is what the served `ETag` is *for*.
+
+    Until this feature the route minted a validator on every response and then
+    accepted it only on a write. A client holding the tag had no way to ask
+    "still current?" — it could only re-fetch and compare, which is the thing
+    the tag exists to avoid.
+    """
+
+    async def test_the_current_tag_is_304(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": tag_for(mock_user)}
+        )
+
+        assert response.status_code == 304
+
+    async def test_the_304_carries_the_tag_it_confirmed(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        """§15.4.5: a 304 sends the `ETag` the client's copy may keep using."""
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": tag_for(mock_user)}
+        )
+
+        assert response.headers["etag"] == tag_for(mock_user)
+
+    async def test_the_304_has_no_body(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        """§15.4.5: a 304 MUST NOT carry content — that is the entire saving."""
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": tag_for(mock_user)}
+        )
+
+        assert response.content == b""
+        assert "content-length" not in response.headers
+
+    async def test_the_304_repeats_the_caching_policy(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        """A revalidation that dropped it would leave the client's stored copy
+        governed by whatever it remembered from the original response."""
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": tag_for(mock_user)}
+        )
+
+        assert response.headers["cache-control"] == "private, no-cache"
+
+    async def test_the_read_permits_revalidation(
+        self, authenticated_client: AsyncClient
+    ) -> None:
+        """`no-store` and a conditional GET cannot both be meant.
+
+        `no-store` (RFC 9111 §5.2.2.5) forbids the client to keep the
+        representation at all, so there is nothing for an `If-None-Match` to
+        revalidate and the tag this route serves is decoration. `no-cache`
+        (§5.2.2.4) is the directive that was wanted all along: store it, and
+        never reuse it without asking the origin first. `private` is untouched,
+        so no shared cache may hold it either way.
+        """
+        response = await authenticated_client.get(ENDPOINT)
+
+        assert response.headers["cache-control"] == "private, no-cache"
+
+    async def test_a_stale_tag_gets_the_full_representation(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        stale = tag_for(mock_user, version=mock_user.version + 1)
+
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": stale}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["email"] == mock_user.email
+
+    async def test_a_wildcard_is_304_because_the_profile_exists(
+        self, authenticated_client: AsyncClient
+    ) -> None:
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": "*"}
+        )
+
+        assert response.status_code == 304
+
+    async def test_a_weak_form_of_the_current_tag_is_304(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        """The weak comparison function, end to end through the route."""
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": f"W/{tag_for(mock_user)}"}
+        )
+
+        assert response.status_code == 304
+
+    async def test_a_list_containing_the_current_tag_is_304(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        response = await authenticated_client.get(
+            ENDPOINT,
+            headers={"If-None-Match": f'"stale", {tag_for(mock_user)}'},
+        )
+
+        assert response.status_code == 304
+
+    async def test_another_accounts_tag_at_the_same_version_is_not_304(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        """The tag carries the row id, so one account's tag cannot confirm
+        another's copy — a 304 here would be a cache serving the wrong user."""
+        other = resource_version_tag(uuid.uuid4(), mock_user.version).serialize()
+
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": other}
+        )
+
+        assert response.status_code == 200
+
+    async def test_a_malformed_field_is_400_rather_than_ignored(
+        self, authenticated_client: AsyncClient
+    ) -> None:
+        """Ignoring it would answer 200 to a client that believed it had asked
+        conditionally — a silent waste rather than a reported bug."""
+        response = await authenticated_client.get(
+            ENDPOINT, headers={"If-None-Match": "notatag"}
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"] == "MALFORMED_PRECONDITION"
+        assert "If-None-Match" in response.json()["message"]
+
+    async def test_head_is_not_routed_here(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        """FastAPI's `APIRoute` does not add `HEAD` to a `GET` route.
+
+        Starlette's plain `Route` does, which is the source of the belief that
+        this handler already answers both. It does not: a `HEAD` is a 405. The
+        route reads the method off the request rather than hardcoding `"GET"`,
+        so this is a documented gap and not a latent wrong answer.
+        """
+        response = await authenticated_client.head(
+            ENDPOINT, headers={"If-None-Match": tag_for(mock_user)}
+        )
+
+        assert response.status_code == 405
+        assert response.headers["allow"] == "GET"
+
+    async def test_authentication_is_decided_before_the_precondition(
+        self, async_client: AsyncClient
+    ) -> None:
+        """A 304 to an unauthenticated caller would confirm that a guessed tag
+        describes somebody's current profile."""
+        response = await async_client.get(ENDPOINT, headers={"If-None-Match": "*"})
+
+        assert response.status_code == 401
+
+
+class TestPreconditionPrecedence:
+    """§13.2.2 step 3: `If-None-Match` is evaluated on a write too.
+
+    A request carrying both fields is asking for two contradictory things —
+    "only if unchanged" and "only if absent" — and the RFC resolves it by
+    evaluating `If-Match` first and then still evaluating `If-None-Match`. On
+    an unsafe method a match there is a 412, not a 304: answering 304 would
+    tell the client its write had succeeded and changed nothing.
+    """
+
+    async def test_if_none_match_matching_on_a_patch_is_412(
+        self,
+        authenticated_client: AsyncClient,
+        mock_user: User,
+        mock_db: AsyncMock,
+    ) -> None:
+        response = await authenticated_client.patch(
+            ENDPOINT,
+            json={"notification_channel": "none"},
+            headers={
+                "If-Match": tag_for(mock_user),
+                "If-None-Match": tag_for(mock_user),
+            },
+        )
+
+        assert response.status_code == 412
+        mock_db.commit.assert_not_awaited()
+
+    async def test_a_patch_is_unaffected_by_a_stale_if_none_match(
+        self,
+        authenticated_client: AsyncClient,
+        mock_user: User,
+        mock_db: AsyncMock,
+    ) -> None:
+        response = await authenticated_client.patch(
+            ENDPOINT,
+            json={"notification_channel": "none"},
+            headers={
+                "If-Match": tag_for(mock_user),
+                "If-None-Match": '"someone-elses-tag"',
+            },
+        )
+
+        assert response.status_code == 200
+        mock_db.commit.assert_awaited_once()
+
+    async def test_a_failing_if_match_is_decided_first(
+        self,
+        authenticated_client: AsyncClient,
+        mock_user: User,
+        mock_db: AsyncMock,
+    ) -> None:
+        """Both fields refuse this request; `If-Match` owns the 412 (step 1),
+        so the message names the field whose precondition actually failed."""
+        response = await authenticated_client.patch(
+            ENDPOINT,
+            json={"notification_channel": "none"},
+            headers={
+                "If-Match": '"stale"',
+                "If-None-Match": tag_for(mock_user),
+            },
+        )
+
+        assert response.status_code == 412
+        assert "If-Match" in response.json()["message"]
+        mock_db.commit.assert_not_awaited()

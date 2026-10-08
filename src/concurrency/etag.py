@@ -1,13 +1,15 @@
-"""Entity tags and `If-Match`, parsed and compared the way RFC 9110 says.
+"""The `If-Match` precondition, parsed and compared the way RFC 9110 says.
 
-Two rules here are easy to get wrong and expensive to get wrong, so they are
-stated once, in code, rather than left to each route:
+The grammar and `EntityTag` itself live in `src/concurrency/tags.py`, shared
+with `If-None-Match`. What is specific to this field is the comparison it uses
+and what a failure means:
 
 **`If-Match` uses the strong comparison function** (RFC 9110 §13.1.1). A weak
 tag — `W/"7"` — never satisfies it, even against `"7"`. Weakness is a claim
 that two representations are *semantically* equivalent, which is a useful thing
 to say about a cached copy and a useless thing to say about a row you are about
 to overwrite: "equivalent enough to read" is not "unchanged since I read it".
+`If-None-Match` is the field for which the other answer is right.
 
 **A malformed `If-Match` is a 400, not a shrug.** The obvious alternative is to
 ignore a header we cannot parse, which turns the precondition off at exactly
@@ -15,73 +17,20 @@ the moment the client believed it was on, and turns a lost update into a
 success. Failing loudly costs a client one visible bug; ignoring it costs
 someone else's edit.
 
-The grammar (§8.8.3, §13.1.1):
-
-    If-Match   = "*" / #entity-tag
-    entity-tag = [ weak ] opaque-tag
-    weak       = %s"W/"
-    opaque-tag = DQUOTE *etagc DQUOTE
-    etagc      = %x21 / %x23-7E / obs-text
-
-Note what `etagc` admits: a comma is `%x2C`, so `If-Match: "a,b"` is one tag
-and not two, and splitting the header on commas is wrong. Hence the scanner
-below rather than `header.split(",")`.
+    If-Match = "*" / #entity-tag
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
-from src.exceptions import (
-    BadRequestError,
-    PreconditionFailedError,
-    PreconditionRequiredError,
+from src.concurrency.tags import (
+    OWS,
+    EntityTag,
+    MalformedPreconditionError,
+    parse_entity_tag_list,
 )
-
-# `[ weak ] opaque-tag`, anchored by the caller with `.match(raw, pos)`.
-_ENTITY_TAG = re.compile(r'(W/)?"([\x21\x23-\x7e\x80-\xff]*)"')
-_OWS = " \t"
-
-
-class MalformedPreconditionError(BadRequestError):
-    """Raised when a precondition header does not parse.
-
-    A `BadRequestError` subclass rather than its own status: the request is
-    malformed, which is what 400 means. It carries a distinct `error_code` so a
-    client can tell "your If-Match is not a valid entity tag" apart from every
-    other 400 this API can return, without parsing prose.
-    """
-
-    error_code = "MALFORMED_PRECONDITION"
-
-
-@dataclass(frozen=True, slots=True)
-class EntityTag:
-    """One entity tag: an opaque string plus the weak/strong distinction.
-
-    `value` is the *unquoted* opaque part. Constructing one with a value
-    containing a character `etagc` forbids raises, because the alternative is
-    emitting a header no conforming client can parse — and the caller who chose
-    the value is the only one who can fix it.
-    """
-
-    value: str
-    weak: bool = False
-
-    def __post_init__(self) -> None:
-        if not _ENTITY_TAG.fullmatch(f'"{self.value}"'):
-            raise ValueError(
-                f"entity-tag value contains characters RFC 9110 forbids: {self.value!r}"
-            )
-
-    def serialize(self) -> str:
-        """Render as it appears in an `ETag` or `If-Match` header."""
-        return f'W/"{self.value}"' if self.weak else f'"{self.value}"'
-
-    def strongly_matches(self, other: EntityTag) -> bool:
-        """RFC 9110 §8.8.3.2 strong comparison: both strong, values equal."""
-        return not self.weak and not other.weak and self.value == other.value
+from src.exceptions import PreconditionFailedError, PreconditionRequiredError
 
 
 def resource_version_tag(resource_id: object, version: int) -> EntityTag:
@@ -93,7 +42,7 @@ def resource_version_tag(resource_id: object, version: int) -> EntityTag:
     would compare equal to a completely different row at the same version. That
     matters for exactly one resource shape, but it is the shape this API has:
     `/me` is a different resource per bearer token behind a single URI, which
-    is also why those responses are marked `Cache-Control: private, no-store`.
+    is also why those responses are marked `Cache-Control: private, no-cache`.
 
     Values are opaque to clients, so nothing depends on the format, and the id
     is already in the body of any response that carries the tag.
@@ -130,13 +79,13 @@ class IfMatch:
         if raw is None:
             return cls.absent()
 
-        if raw.strip(_OWS) == "*":
+        if raw.strip(OWS) == "*":
             return cls(present=True, wildcard=True)
 
         # Passed unstripped: the scanner already skips OWS at both ends of
         # every element, and trimming here first would mean two places
         # deciding what whitespace is allowed where.
-        tags = _parse_tag_list(raw)
+        tags = parse_entity_tag_list(raw, field="If-Match")
         if not tags:
             # Syntactically a list, semantically nothing: `If-Match: ,` asks
             # for the update to succeed if the row matches none of no tags,
@@ -175,43 +124,3 @@ class IfMatch:
                 "The resource has changed since the version your If-Match refers to",
                 headers={"ETag": current.serialize()},
             )
-
-
-def _parse_tag_list(raw: str) -> tuple[EntityTag, ...]:
-    """Scan `#entity-tag`, raising `MalformedPreconditionError` on anything else.
-
-    Empty list elements are skipped rather than rejected: RFC 9110 §5.6.1.2
-    requires recipients to tolerate them, and they come from clients that build
-    the header by joining a list that had a hole in it.
-    """
-    tags: list[EntityTag] = []
-    pos = 0
-    length = len(raw)
-
-    while pos < length:
-        while pos < length and raw[pos] in _OWS:
-            pos += 1
-        if pos < length and raw[pos] == ",":
-            pos += 1
-            continue
-        if pos >= length:
-            break
-
-        match = _ENTITY_TAG.match(raw, pos)
-        if match is None:
-            raise MalformedPreconditionError(
-                f"If-Match is not a valid entity-tag list at offset {pos}: {raw!r}"
-            )
-        tags.append(EntityTag(match.group(2), weak=match.group(1) is not None))
-        pos = match.end()
-
-        while pos < length and raw[pos] in _OWS:
-            pos += 1
-        if pos < length:
-            if raw[pos] != ",":
-                raise MalformedPreconditionError(
-                    f"If-Match entity tags must be comma-separated: {raw!r}"
-                )
-            pos += 1
-
-    return tuple(tags)

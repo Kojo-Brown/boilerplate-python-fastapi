@@ -27,7 +27,7 @@ from __future__ import annotations
 import structlog
 from sqlalchemy.orm.exc import StaleDataError
 
-from src.concurrency import EntityTag, IfMatch, resource_version_tag
+from src.concurrency import EntityTag, IfMatch, IfNoneMatch, resource_version_tag
 from src.exceptions import PreconditionFailedError, UnprocessableEntityError
 from src.models.user import User
 from src.unit_of_work import UnitOfWork
@@ -60,13 +60,32 @@ class ProfileService:
         user: User,
         changes: ProfileUpdateRequest,
         precondition: IfMatch,
+        *,
+        none_match: IfNoneMatch,
     ) -> User:
-        """Apply `changes` to `user` if `precondition` still holds.
+        """Apply `changes` to `user` if both preconditions still allow it.
 
-        Returns the updated row. Raises 412 if the client's tag is stale, 428
-        if it sent no tag at all, and 422 for a patch that asks for nothing.
+        Returns the updated row. Raises 412 if the client's `If-Match` tag is
+        stale, 428 if it sent no `If-Match` at all, and 422 for a patch that
+        asks for nothing.
+
+        Both preconditions are evaluated here, in the order RFC 9110 §13.2.2
+        fixes: `If-Match` at step 1, `If-None-Match` at step 3, and only then
+        the write. The order is observable — a request whose `If-Match` is
+        stale *and* whose `If-None-Match` matches gets the 412 that names
+        `If-Match`, which is the field whose precondition the client got wrong.
+
+        `none_match` is keyword-only and has no default. A caller that means
+        "there was no such header" says `IfNoneMatch.absent()`, because the
+        alternative is a route that silently skips step 3 by forgetting an
+        argument.
         """
-        precondition.require_match(profile_etag(user))
+        tag = profile_etag(user)
+        precondition.require_match(tag)
+        # §13.2.2 step 3. On an unsafe method a satisfied `If-None-Match` is a
+        # refusal, not a 304: the client asked to write only if the resource
+        # did *not* already have this tag, and it does.
+        none_match.evaluate(tag, method="PATCH")
 
         fields = changes.model_dump(exclude_unset=True)
         if not fields:

@@ -67,7 +67,10 @@ class ConflictError(AppException):
 
 
 class PreconditionFailedError(AppException):
-    """The request's `If-Match` did not describe the resource's current state.
+    """A precondition header refused the request.
+
+    Either an `If-Match` that does not describe the resource's current state,
+    or an `If-None-Match` on an unsafe method that does (RFC 9110 §13.1.2).
 
     Distinct from `ConflictError` on purpose. A 409 says the request conflicts
     with the resource's rules — a duplicate email, an order already refunded —
