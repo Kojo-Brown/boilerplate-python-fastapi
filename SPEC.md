@@ -4,7 +4,7 @@
 
 ## Phase 0 — Green Baseline (blocks all feature work)
 - [x] Verify every pinned version exists on PyPI, then commit a resolved `uv.lock`
-- [x] Get `uv sync`, `ruff check`, `mypy`, and `pytest` all passing locally from a clean clone
+- [x] Get `uv sync`, `ruff check`, `mypy`, and `pytest` all passing locally from a clean clone — regressed and restored: `tests/test_distributed_lock_redis.py` kept its skip-on-no-Redis guard in its fixtures, so the one test that built its own client inline had no guard and failed on every machine without a Redis. CI runs a `redis:7-alpine` service and stayed green throughout, which is why the local gate an agent is told to run was red for weeks while the gate that blocks a merge was not. The guard now lives in a `decoding_backend` fixture, so a future test that needs an injected client inherits it instead of restating it. Still open, same shape and not fixed here: `uv run mypy .` — the form `CLAUDE.md` prescribes — now aborts before typechecking anything on `Source file found twice under different module names` for `scripts/check_tenant_isolation.py`, so the 83 test-file errors recorded under Phase 11 are no longer even reached. Widening CI or narrowing `CLAUDE.md` is still its own deliberate PR
 - [x] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
 - [x] Confirm the app imports and starts against a real Postgres in CI
 
