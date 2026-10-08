@@ -13,12 +13,8 @@ and `IfMatch` are the HTTP half; the storage half is
 the two meet. See `docs/optimistic-concurrency.md`.
 """
 
-from src.concurrency.etag import (
-    EntityTag,
-    IfMatch,
-    MalformedPreconditionError,
-    resource_version_tag,
-)
+from src.concurrency.etag import IfMatch, resource_version_tag
+from src.concurrency.tags import EntityTag, MalformedPreconditionError
 
 __all__ = [
     "EntityTag",

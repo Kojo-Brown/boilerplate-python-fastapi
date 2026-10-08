@@ -9,8 +9,8 @@ a row on. This field guards a *read*, and semantic equivalence is exactly the
 question a cache is asking: may I keep what I have? So `W/"7"` and `"7"` name
 the same representation here, and the weak flag is ignored on both sides.
 
-The grammar is the one `If-Match` uses, so the scanner is shared — a comma is a
-legal `etagc`, which is why neither field may be split on commas.
+The grammar is the one `If-Match` uses and lives in `src/concurrency/tags.py` —
+a comma is a legal `etagc`, which is why neither field may be split on commas.
 """
 
 from __future__ import annotations
@@ -18,14 +18,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from src.concurrency.etag import (
+from src.concurrency.tags import (
+    OWS,
     EntityTag,
     MalformedPreconditionError,
-    _parse_tag_list,
+    parse_entity_tag_list,
 )
 from src.exceptions import PreconditionFailedError
-
-_OWS = " \t"
 
 #: The methods §13.1.2 answers with 304 rather than 412. Both are safe and
 #: both can satisfy a request from a cache, which is the property that matters:
@@ -64,10 +63,10 @@ class IfNoneMatch:
         if raw is None:
             return cls.absent()
 
-        if raw.strip(_OWS) == "*":
+        if raw.strip(OWS) == "*":
             return cls(present=True, wildcard=True)
 
-        tags = _parse_tag_list(raw, field="If-None-Match")
+        tags = parse_entity_tag_list(raw, field="If-None-Match")
         if not tags:
             raise MalformedPreconditionError(
                 "If-None-Match must be '*' or a non-empty list of entity tags"
