@@ -134,6 +134,19 @@ the `ETag` and `If-Match` protocol on `/api/v1/users/me`, why the precondition
 is checked both in the service and in the UPDATE's WHERE clause, and how to put
 the same guard on another resource.
 
+## Conditional GET
+[docs/conditional-get.md](./docs/conditional-get.md) — `If-None-Match` and the
+304 on `/api/v1/users/me`, why this field compares entity tags *weakly* where
+`If-Match` compares them strongly, what a match means on an unsafe method,
+RFC 9110 §13.2.2 precedence when both fields arrive, and why the route serves
+`no-cache` rather than `no-store` — including what that trade costs and the one
+constant to change to take it back.
+
+[docs/tdd-kata.md](./docs/tdd-kata.md) — the same feature as a worked
+red→green→refactor record, one commit per step: what each cycle found that
+planning had not, the three expectations that changed and why, and the two
+tests that were wrong.
+
 ## Pessimistic locking
 [docs/pessimistic-locking.md](./docs/pessimistic-locking.md) — `lock_row`,
 `lock_rows` and `lock_timeout` over `SELECT ... FOR UPDATE`, when to prefer this
