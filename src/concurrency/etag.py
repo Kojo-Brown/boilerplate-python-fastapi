@@ -84,8 +84,12 @@ class EntityTag:
         return not self.weak and not other.weak and self.value == other.value
 
     def weakly_matches(self, other: EntityTag) -> bool:
-        """RFC 9110 §8.8.3.2 weak comparison: values equal, weakness ignored."""
-        raise NotImplementedError
+        """RFC 9110 §8.8.3.2 weak comparison: values equal, weakness ignored.
+
+        Used by `If-None-Match` and not by `If-Match` — see
+        `src/concurrency/conditional.py` for why the distinction matters.
+        """
+        return self.value == other.value
 
 
 def resource_version_tag(resource_id: object, version: int) -> EntityTag:
