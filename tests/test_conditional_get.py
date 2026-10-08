@@ -20,7 +20,8 @@ from __future__ import annotations
 import pytest
 
 from src.concurrency import EntityTag, MalformedPreconditionError
-from src.concurrency.conditional import IfNoneMatch
+from src.concurrency.conditional import ConditionalOutcome, IfNoneMatch
+from src.exceptions import PreconditionFailedError
 
 
 class TestWeakComparison:
@@ -124,3 +125,66 @@ class TestIfNoneMatchMatching:
     def test_a_weak_field_tag_matches_a_strong_current_tag(self) -> None:
         """The whole point of the weak comparison function being the one here."""
         assert IfNoneMatch.parse('W/"7"').matches(EntityTag("7"))
+
+
+class TestEvaluation:
+    """§13.1.2: a match is a 304 for a safe method and a 412 for any other.
+
+    The second half of that rule is the one worth having a module for. A
+    conditional `GET` that matches is a cache hit; the identical field on a
+    `PATCH` is a client saying "create this only if it does not exist yet", and
+    answering *that* with a 304 tells a client its write succeeded and nothing
+    changed, when in fact the write never ran.
+    """
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD", "PATCH", "DELETE"])
+    def test_an_absent_field_always_proceeds(self, method: str) -> None:
+        outcome = IfNoneMatch.absent().evaluate(EntityTag("7"), method=method)
+
+        assert outcome is ConditionalOutcome.PROCEED
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD", "PATCH", "DELETE"])
+    def test_a_field_that_does_not_match_always_proceeds(self, method: str) -> None:
+        outcome = IfNoneMatch.parse('"6"').evaluate(EntityTag("7"), method=method)
+
+        assert outcome is ConditionalOutcome.PROCEED
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_a_match_on_a_safe_method_is_not_modified(self, method: str) -> None:
+        outcome = IfNoneMatch.parse('"7"').evaluate(EntityTag("7"), method=method)
+
+        assert outcome is ConditionalOutcome.NOT_MODIFIED
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_a_wildcard_on_a_safe_method_is_not_modified(self, method: str) -> None:
+        outcome = IfNoneMatch.parse("*").evaluate(EntityTag("7"), method=method)
+
+        assert outcome is ConditionalOutcome.NOT_MODIFIED
+
+    @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+    def test_a_match_on_an_unsafe_method_is_412(self, method: str) -> None:
+        with pytest.raises(PreconditionFailedError):
+            IfNoneMatch.parse('"7"').evaluate(EntityTag("7"), method=method)
+
+    def test_a_wildcard_on_an_unsafe_method_is_412(self) -> None:
+        """`If-None-Match: *` on a write means "only if it does not exist"."""
+        with pytest.raises(PreconditionFailedError):
+            IfNoneMatch.parse("*").evaluate(EntityTag("7"), method="PUT")
+
+    def test_the_412_names_the_current_tag(self) -> None:
+        """So a client that wants to re-read and retry already has the tag."""
+        with pytest.raises(PreconditionFailedError) as raised:
+            IfNoneMatch.parse('"7"').evaluate(EntityTag("7"), method="PUT")
+
+        assert raised.value.headers == {"ETag": '"7"'}
+
+    def test_the_method_token_is_case_sensitive(self) -> None:
+        """§9.1: `get` is not `GET`.
+
+        Starlette routes on the exact token, so a lowercase method cannot reach
+        a handler on this API at all — this pins which way the module reads the
+        spec rather than guarding a reachable path. The caller passes the
+        method as received, never lowercased.
+        """
+        with pytest.raises(PreconditionFailedError):
+            IfNoneMatch.parse('"7"').evaluate(EntityTag("7"), method="get")

@@ -16,6 +16,7 @@ legal `etagc`, which is why neither field may be split on commas.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 from src.concurrency.etag import EntityTag, MalformedPreconditionError, _parse_tag_list
 
@@ -71,3 +72,14 @@ class IfNoneMatch:
         if self.wildcard:
             return True
         return any(tag.weakly_matches(current) for tag in self.tags)
+
+    def evaluate(self, current: EntityTag, *, method: str) -> ConditionalOutcome:
+        """Apply §13.1.2 to a request that carried this field."""
+        raise NotImplementedError
+
+
+class ConditionalOutcome(Enum):
+    """What a satisfied or unsatisfied `If-None-Match` means for the response."""
+
+    PROCEED = "proceed"
+    NOT_MODIFIED = "not_modified"
