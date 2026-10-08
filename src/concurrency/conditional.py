@@ -18,9 +18,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from src.concurrency.etag import EntityTag, MalformedPreconditionError, _parse_tag_list
+from src.concurrency.etag import (
+    EntityTag,
+    MalformedPreconditionError,
+    _parse_tag_list,
+)
+from src.exceptions import PreconditionFailedError
 
 _OWS = " \t"
+
+#: The methods §13.1.2 answers with 304 rather than 412. Both are safe and
+#: both can satisfy a request from a cache, which is the property that matters:
+#: a 304 is only meaningful when the client already holds a representation it
+#: was allowed to store.
+_SAFE_METHODS = frozenset({"GET", "HEAD"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +85,31 @@ class IfNoneMatch:
         return any(tag.weakly_matches(current) for tag in self.tags)
 
     def evaluate(self, current: EntityTag, *, method: str) -> ConditionalOutcome:
-        """Apply §13.1.2 to a request that carried this field."""
-        raise NotImplementedError
+        """Apply §13.1.2 to a request against the representation `current`.
+
+        A field that names the current representation is satisfied, and what
+        that is worth depends on what the request was going to do:
+
+        - `GET`/`HEAD` → `NOT_MODIFIED`. The client's copy is good; send it the
+          tag and no body.
+        - anything else → 412. On an unsafe method this field means "only if it
+          does not exist", so a match is a refusal, and the 412 carries the
+          current tag so a client can re-read and retry without a blind GET.
+
+        `method` is the token as received. §9.1 makes it case-sensitive, so
+        `get` is not `GET` and is treated as the unsafe branch; lowercasing it
+        here would be this module deciding a routing question that is not its
+        to decide.
+        """
+        if not self.matches(current):
+            return ConditionalOutcome.PROCEED
+        if method in _SAFE_METHODS:
+            return ConditionalOutcome.NOT_MODIFIED
+        raise PreconditionFailedError(
+            "The resource already exists with the entity tag your "
+            "If-None-Match refers to",
+            headers={"ETag": current.serialize()},
+        )
 
 
 class ConditionalOutcome(Enum):
