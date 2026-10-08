@@ -31,7 +31,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.pool import NullPool
 
 from src.auth.utils import create_access_token
-from src.concurrency import IfMatch, resource_version_tag
+from src.concurrency import IfMatch, IfNoneMatch, resource_version_tag
 from src.config import settings
 from src.database import Base, get_db
 from src.exceptions import PreconditionFailedError
@@ -213,6 +213,7 @@ class TestServiceUnderRace:
                     user,
                     ProfileUpdateRequest(notification_channel="webhook"),
                     precondition,
+                    none_match=IfNoneMatch.absent(),
                 )
 
             assert excinfo.value.status_code == 412

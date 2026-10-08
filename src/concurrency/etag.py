@@ -42,7 +42,7 @@ def resource_version_tag(resource_id: object, version: int) -> EntityTag:
     would compare equal to a completely different row at the same version. That
     matters for exactly one resource shape, but it is the shape this API has:
     `/me` is a different resource per bearer token behind a single URI, which
-    is also why those responses are marked `Cache-Control: private, no-store`.
+    is also why those responses are marked `Cache-Control: private, no-cache`.
 
     Values are opaque to clients, so nothing depends on the format, and the id
     is already in the body of any response that carries the tag.

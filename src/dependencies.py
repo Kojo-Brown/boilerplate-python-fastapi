@@ -58,7 +58,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import get_current_user
 from src.auth.service import AuthService
-from src.concurrency import IfMatch
+from src.concurrency import IfMatch, IfNoneMatch
 from src.database import get_db
 from src.distributed_lock.base import LockBackend
 from src.distributed_lock.factory import get_lock_backend
@@ -146,6 +146,22 @@ def get_if_match(
     return IfMatch.parse(", ".join(if_match))
 
 
+def get_if_none_match(
+    if_none_match: Annotated[list[str] | None, Header(alias="If-None-Match")] = None,
+) -> IfNoneMatch:
+    """Parse the request's `If-None-Match`, or record that there wasn't one.
+
+    A list for the same reason `get_if_match` takes one: one header field may
+    arrive as several field lines, and RFC 9110 §5.3 says to read them as one
+    comma-separated value. Taking a `str` would silently honour only the first
+    line, which on *this* field means re-sending a representation the client
+    already had — a cache that works for some clients and not others.
+    """
+    if not if_none_match:
+        return IfNoneMatch.absent()
+    return IfNoneMatch.parse(", ".join(if_none_match))
+
+
 def get_user_export_source(db: DbSession) -> UserExportSource:
     """Bulk reads of the user table, over this request's session.
 
@@ -193,6 +209,7 @@ def get_auth_service(
 
 CurrentUserDep = Annotated[User, Depends(get_current_user)]
 IfMatchDep = Annotated[IfMatch, Depends(get_if_match)]
+IfNoneMatchDep = Annotated[IfNoneMatch, Depends(get_if_none_match)]
 ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 UserStoreDep = Annotated[UserStore, Depends(get_user_store)]
 UserExportSourceDep = Annotated[UserExportSource, Depends(get_user_export_source)]
@@ -241,6 +258,7 @@ __all__ = [
     "DbSession",
     "EventPublisherDep",
     "IfMatchDep",
+    "IfNoneMatchDep",
     "LockBackendDep",
     "MessagePublisherDep",
     "PaymentGatewayDep",
@@ -254,6 +272,7 @@ __all__ = [
     "get_cpu_pool",
     "get_event_publisher",
     "get_if_match",
+    "get_if_none_match",
     "get_message_publisher",
     "get_profile_service",
     "get_refresh_token_store",

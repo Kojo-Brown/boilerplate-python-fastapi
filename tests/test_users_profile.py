@@ -56,10 +56,17 @@ class TestReadProfile:
     async def test_forbids_shared_caching(
         self, authenticated_client: AsyncClient
     ) -> None:
-        """One URI, a different resource per token: no shared cache may keep it."""
+        """One URI, a different resource per token: no shared cache may keep it.
+
+        `private` is the directive that says so, and it is unchanged. This
+        assertion read `private, no-store` until conditional reads existed —
+        see `TestConditionalRead.test_the_read_permits_revalidation` for why
+        the second directive had to give.
+        """
         response = await authenticated_client.get(ENDPOINT)
 
-        assert response.headers["cache-control"] == "private, no-store"
+        assert "private" in response.headers["cache-control"]
+        assert response.headers["cache-control"] == "private, no-cache"
 
     async def test_requires_authentication(self, async_client: AsyncClient) -> None:
         assert (await async_client.get(ENDPOINT)).status_code == 401
@@ -93,7 +100,7 @@ class TestConditionalUpdate:
         )
 
         assert response.headers["etag"] == tag_for(mock_user)
-        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["cache-control"] == "private, no-cache"
 
     async def test_wildcard_is_accepted(
         self, authenticated_client: AsyncClient, mock_db: AsyncMock
@@ -424,8 +431,10 @@ class TestConditionalRead:
     async def test_a_stale_tag_gets_the_full_representation(
         self, authenticated_client: AsyncClient, mock_user: User
     ) -> None:
+        stale = tag_for(mock_user, version=mock_user.version + 1)
+
         response = await authenticated_client.get(
-            ENDPOINT, headers={"If-None-Match": tag_for(mock_user, version=1)}
+            ENDPOINT, headers={"If-None-Match": stale}
         )
 
         assert response.status_code == 200
@@ -483,8 +492,25 @@ class TestConditionalRead:
         )
 
         assert response.status_code == 400
-        assert response.json()["error_code"] == "MALFORMED_PRECONDITION"
+        assert response.json()["error"] == "MALFORMED_PRECONDITION"
         assert "If-None-Match" in response.json()["message"]
+
+    async def test_head_is_not_routed_here(
+        self, authenticated_client: AsyncClient, mock_user: User
+    ) -> None:
+        """FastAPI's `APIRoute` does not add `HEAD` to a `GET` route.
+
+        Starlette's plain `Route` does, which is the source of the belief that
+        this handler already answers both. It does not: a `HEAD` is a 405. The
+        route reads the method off the request rather than hardcoding `"GET"`,
+        so this is a documented gap and not a latent wrong answer.
+        """
+        response = await authenticated_client.head(
+            ENDPOINT, headers={"If-None-Match": tag_for(mock_user)}
+        )
+
+        assert response.status_code == 405
+        assert response.headers["allow"] == "GET"
 
     async def test_authentication_is_decided_before_the_precondition(
         self, async_client: AsyncClient
