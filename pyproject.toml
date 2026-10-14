@@ -242,11 +242,15 @@ do_not_mutate_patterns = [
 
 # The suite's own fixtures and env defaults live here; mutmut copies `tests/`
 # by default but not these two, and `tests/conftest.py` imports both.
+# mutmut already copies `tests/`, `pyproject.toml` and the lockfiles into
+# `mutants/` on its own. This adds the one further file a run needs, and nothing
+# else: `tests/conftest.py` sets its own environment defaults with
+# `os.environ.setdefault`, so the selection needs no `.env` and no `alembic.ini`
+# — verified by running the gate to the same score with neither present.
 also_copy = [
     # Reconciles mutmut's src-layout assumption with this repo's `src` package;
     # the module's own docstring has the detail. It has to be copied because
     # mutmut removes the project root from `sys.path` (so the unmutated source
     # cannot be imported) and `mutants/` is what it puts there instead.
     "mutmut_src_layout.py",
-    "alembic.ini",
 ]
