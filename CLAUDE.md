@@ -15,9 +15,16 @@ Production-grade FastAPI + Python 3.14 async API boilerplate. Spec-driven and PR
    uv run ruff check .
    uv run pytest
    uv run python -c 'from src.main import app'
+   uv run mutmut run && uv run mutmut export-cicd-stats
+   uv run python scripts/check_mutation_score.py
    ```
    The import check needs a `.env` (`cp .env.example .env`) — settings are
    validated at import time, so it fails without `DATABASE_URL` and `SECRET_KEY`.
+   The mutation gate is the `mutation` CI job and blocks a merge like the rest, so
+   it belongs in this list; it is ~45s because it is scoped to eight modules, and
+   `mutmut run` exits 0 even when mutants survive, so the threshold is the
+   separate script. See `docs/mutation-testing.md` before changing the threshold
+   or the `only_mutate` list — and never lower either to turn a red build green.
 6. Commit, `git push -u origin <branch>`, then `gh pr create`.
 7. `gh pr checks --watch` → **merge only if every check is green**:
    `gh pr merge --squash --delete-branch`

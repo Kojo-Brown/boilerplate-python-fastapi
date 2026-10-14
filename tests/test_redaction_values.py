@@ -83,6 +83,38 @@ class TestJWT:
         blob = f"{head}.cGF5bG9hZA.c2ln"
         assert scrub(blob) == blob
 
+    def test_a_header_whose_encoding_needs_padding_is_still_decoded(
+        self, scrub: Callable[[str], str]
+    ) -> None:
+        """The `=` padding `_jwt_header_ok` re-adds has to actually be padding.
+
+        Base64 decodes in four-character groups and a JWT segment carries no
+        padding (RFC 7515 §2), so the detector puts it back with
+        `"=" * (-len(segment) % 4)`. Every other fixture in this class encodes a
+        header whose segment is already a multiple of four —
+        `{"alg": "HS256", "typ": "JWT"}` is forty characters — so for all of
+        them that expression is zero, and a detector that padded with the wrong
+        *string* would pass every one of them. A one-key header is twenty-two
+        characters and needs two, which exercises it.
+
+        The message deliberately does not say "token". Written that way,
+        `_AUTH_SCHEME` matches `Token <something>` as a credential-bearing
+        header and redacts the blob before `_JWT` is ever consulted — so the
+        test passes while asserting nothing at all about JWT decoding. That is
+        how it was written first, and the only thing that noticed was mutmut:
+        the padding mutants survived a test whose name claims to cover them.
+
+        Two arithmetic mutants of that expression stay alive on purpose, and
+        `docs/mutation-testing.md` records why: `+len % 4` and `-len % 5` both
+        produce *more* padding than needed here, never less, and
+        `binascii.a2b_base64` stops at the first `=` and ignores the rest. No
+        header can distinguish them, so there is no test to write.
+        """
+        blob = a_jwt(header={"alg": "HS256"})
+        assert scrub(f"upstream refused {blob} there") == (
+            f"upstream refused {REDACTED} there"
+        )
+
 
 class TestCardNumbers:
     @pytest.mark.parametrize(
@@ -109,6 +141,34 @@ class TestCardNumbers:
 
     def test_a_short_number_survives(self, scrub: Callable[[str], str]) -> None:
         assert scrub("count 12345678") == "count 12345678"
+
+    @pytest.mark.parametrize(
+        "pan",
+        [
+            "5555555555554444",
+            "5105105105105100",
+            "378282246310005",
+            "6011111111111117",
+        ],
+    )
+    def test_a_pan_whose_doubled_digits_overflow_is_redacted(
+        self, scrub: Callable[[str], str], pan: str
+    ) -> None:
+        """Luhn's "subtract nine" step needs a digit above four to reach it.
+
+        `_luhn_ok` doubles every second digit from the right and, when the
+        result exceeds nine, subtracts nine from it. `4111111111111111` — the
+        only valid number the tests above used — is all ones and a four, so
+        every doubled digit is at most eight and that branch never runs: the
+        function was passing its tests with a third of its body unexecuted.
+        Each number here has a digit of five or more in a doubled position, so
+        the subtraction happens, which is what separates it from adding nine,
+        from subtracting ten, and from assigning nine outright.
+
+        All four are the publicly documented test numbers of the card schemes.
+        They are Luhn-valid by construction and belong to nobody.
+        """
+        assert scrub(f"charge failed for {pan}") == f"charge failed for {REDACTED}"
 
 
 class TestIBAN:

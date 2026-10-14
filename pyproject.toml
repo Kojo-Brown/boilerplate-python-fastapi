@@ -78,6 +78,10 @@ dev-dependencies = [
     # shipping it one day should be a resolver error rather than a collection
     # error in CI.
     "websockets>=15.0",
+    # Mutation testing (see docs/mutation-testing.md and the `mutation` CI job).
+    # mutmut 3 forks a worker per mutant, so it is POSIX-only; the gate job runs
+    # on ubuntu-latest for that reason and nothing else in the suite needs it.
+    "mutmut>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
@@ -115,6 +119,14 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+# `mutants/` is mutmut's working copy of this project — a second `src/` package
+# with the same module names. mypy walks directories rather than consulting
+# `.gitignore`, so without this `uv run mypy .` stops at
+# `error: Duplicate module named "src" (also at "./mutants/src/__init__.py")`
+# as soon as anybody has run the mutation gate locally, and checks nothing
+# further. Ruff needs no equivalent: it respects `.gitignore`, where the
+# directory is already listed.
+exclude = ["^mutants/"]
 
 # aiokafka ships no `py.typed` marker, so under strict mode every import of it
 # is an error rather than an untyped symbol. Silencing that here is deliberate
@@ -127,3 +139,118 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["aiokafka.*"]
 ignore_missing_imports = true
+
+# --- Mutation testing (docs/mutation-testing.md, the `mutation` CI job) -------
+#
+# Scope first, because it is the only decision here that matters. `src/` is 214
+# modules and the suite is ~5000 tests; mutating all of it would be hours per
+# run and would spend nearly all of them on code where a surviving mutant says
+# nothing — a changed log level, a swapped keyword in a Depends() wiring line, a
+# literal in a Prometheus bucket list. Mutation score is only informative where
+# a surviving mutant is a *missing assertion*, which means pure decision logic
+# with no I/O: boundary comparisons, parser state machines, matching rules.
+#
+# So `only_mutate` names eight such modules explicitly rather than excluding
+# their opposite. An allow list cannot silently grow when somebody adds a module
+# — a new module is simply not mutated until it is named here, which is the
+# failure direction that does not break the build for the person who wrote it.
+# Adding one is a deliberate edit with a threshold to re-measure.
+[tool.mutmut]
+source_paths = ["src/"]
+
+only_mutate = [
+    # Cursor pagination: `len(items) > limit` and the slice beside it. Every
+    # off-by-one here is a page that silently drops or duplicates a row.
+    "src/pagination.py",
+    # The entity-tag grammar and the two RFC 9110 §8.8.3.2 comparison
+    # functions. `strongly_matches` is four boolean terms, and three of the
+    # four wrong versions of it still pass a suite of all-strong tags.
+    "src/concurrency/tags.py",
+    "src/concurrency/etag.py",
+    "src/concurrency/conditional.py",
+    # Log redaction: a matcher that over-matches makes logs unreadable and a
+    # matcher that under-matches leaks. Both directions are one mutant wide.
+    "src/redaction/keys.py",
+    "src/redaction/values.py",
+    "src/redaction/walk.py",
+    "src/redaction/processor.py",
+]
+
+# The tests that cover those eight, and nothing else. mutmut works out which
+# tests touch a given function and runs only those per mutant, but it collects
+# from this selection first, so narrowing it is what keeps a run at minutes
+# rather than hours: the full suite spends most of its time on Postgres, Redis
+# and Kafka fixtures that no mutant above can reach.
+pytest_add_cli_args_test_selection = [
+    "tests/test_pagination.py",
+    "tests/test_concurrency_etag.py",
+    "tests/test_conditional_get.py",
+    "tests/test_redaction_keys.py",
+    "tests/test_redaction_values.py",
+    "tests/test_redaction_walk.py",
+    "tests/test_redaction_processor.py",
+]
+
+# `--no-cov` is not a convenience, it is what makes the score mean anything.
+# `[tool.pytest.ini_options].addopts` carries `--cov=src --cov-fail-under=80`,
+# and the selection above covers nowhere near 80% of `src/`. Left alone, pytest
+# would exit non-zero on *every* mutant run including the unmutated baseline —
+# mutmut reads a non-zero exit as "killed", so the gate would report a perfect
+# score while testing nothing at all. A mutation gate that cannot fail is worse
+# than no gate, so this line is load-bearing.
+# `-p no:cacheprovider` stops each of the forked workers writing a .pytest_cache
+# into the mutants/ tree.
+pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider", "-p", "mutmut_src_layout"]
+
+# Only mutate lines the selected tests actually execute. Without this, mutants
+# land on unreachable lines and are reported as survivors that no test could
+# ever have killed, which drags the score down for reasons a contributor cannot
+# act on. It also honours `exclude_lines` from [tool.coverage.report].
+mutate_only_covered_lines = true
+
+do_not_mutate_patterns = [
+    # Log calls: the message text is not a behaviour this suite asserts, and
+    # mutating a level or a string produces a survivor nobody should kill.
+    'logger\.\w+',
+    # A line that is nothing but a long string literal — which, in these eight
+    # modules, is always the human-readable `detail` of a raised exception,
+    # wrapped by the formatter. mutmut mutates such a string four ways (to
+    # `None`, dropped, case-flipped, `XX`-wrapped) and all four survive,
+    # because no test asserts the prose of a 400 or a 412 and none should: the
+    # wording is for a person reading a response body, and pinning it in a test
+    # converts every copy-edit into a failing suite. Before this line they were
+    # 22 of 57 survivors — enough noise to bury the real findings underneath.
+    #
+    # What *is* contractual is asserted and is deliberately not matched here:
+    # the header name a precondition error blames (`field=` sits on a line with
+    # other code, so it stays mutable) and the offending value it quotes. Those
+    # have tests in `tests/test_conditional_get.py`, anchored at the start of
+    # the message so that an `XX`-wrapped name cannot satisfy a substring
+    # match.
+    #
+    # The shape is narrow on purpose. It needs the whole line to be the
+    # literal, so `frozenset({"GET", "HEAD"})` and the redaction phrase list
+    # are untouched; and 20 characters, so no identifier, header name or
+    # sentinel reaches it. The longest non-prose literal in these modules is
+    # `"build_redaction_processor"` at 25 — it is a module-level `__all__`
+    # entry, and mutmut only mutates inside functions, so it was never a
+    # candidate.
+    '^\s*f?"[^"]{20,}",?$',
+    # Docstring-adjacent constants in the grammar modules are RFC quotations.
+    '#: ',
+]
+
+# The suite's own fixtures and env defaults live here; mutmut copies `tests/`
+# by default but not these two, and `tests/conftest.py` imports both.
+# mutmut already copies `tests/`, `pyproject.toml` and the lockfiles into
+# `mutants/` on its own. This adds the one further file a run needs, and nothing
+# else: `tests/conftest.py` sets its own environment defaults with
+# `os.environ.setdefault`, so the selection needs no `.env` and no `alembic.ini`
+# — verified by running the gate to the same score with neither present.
+also_copy = [
+    # Reconciles mutmut's src-layout assumption with this repo's `src` package;
+    # the module's own docstring has the detail. It has to be copied because
+    # mutmut removes the project root from `sys.path` (so the unmutated source
+    # cannot be imported) and `mutants/` is what it puts there instead.
+    "mutmut_src_layout.py",
+]

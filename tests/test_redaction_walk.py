@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Callable
 from typing import Any
+
+import pytest
 
 from src.redaction.keys import KeyPolicy
 from src.redaction.values import REDACTED
@@ -20,6 +23,15 @@ from src.redaction.walk import CIRCULAR, MAX_DEPTH, TOO_DEEP, UNRENDERABLE, Reda
 
 def redactor() -> Redactor:
     return Redactor(KeyPolicy())
+
+
+def _in_a_list(value: Any) -> list[Any]:
+    return [value]
+
+
+def _in_a_dict(value: Any) -> dict[str, Any]:
+    # A deliberately insensitive key: this nests, it does not test the policy.
+    return {"inner": value}
 
 
 class Unprintable:
@@ -85,6 +97,58 @@ class TestContainers:
         rendered = repr(redactor().field("nest", deepest))
         assert TOO_DEEP in rendered
         assert "ada@example.com" not in rendered
+
+    @pytest.mark.parametrize("wrap", [_in_a_list, _in_a_dict], ids=["list", "dict"])
+    @pytest.mark.parametrize(
+        ("containers", "expected"),
+        [(MAX_DEPTH, False), (MAX_DEPTH + 1, True)],
+        ids=["at_the_limit", "one_past_it"],
+    )
+    def test_the_depth_limit_is_where_it_says_it_is(
+        self,
+        wrap: Callable[[Any], Any],
+        containers: int,
+        expected: bool,
+    ) -> None:
+        """Exactly `MAX_DEPTH` containers render; one more is truncated.
+
+        `test_depth_is_bounded` above nests `MAX_DEPTH + 2` deep and only asks
+        whether truncation happened *somewhere*, which every off-by-one in the
+        descent also satisfies: counting from one instead of zero, comparing
+        with `>` instead of `>=`, or stepping the depth by two all still
+        truncate eventually, just at the wrong place — and truncating early is
+        the expensive direction, because it silently drops the part of a log
+        event somebody is reading.
+
+        Pinning both sides of the boundary is what makes the constant mean
+        something. Both container kinds are exercised because the descent is
+        written twice, once in the mapping comprehension and once for
+        sequences, so a wrong step in either is invisible from the other.
+        """
+        innermost = "plain-and-not-sensitive"
+        value: Any = innermost
+        for _ in range(containers):
+            value = wrap(value)
+
+        rendered = repr(redactor().field("nest", value))
+
+        assert (TOO_DEEP in rendered) is expected
+        assert (innermost in rendered) is not expected
+
+    def test_a_sensitive_key_inside_a_container_is_redacted_by_its_name(
+        self,
+    ) -> None:
+        """The value is innocuous, so only the key can explain the marker.
+
+        `test_nesting_is_followed` nests an `email` key over an address, and
+        both the key policy and the value policy would redact that on their
+        own — so it passes whether or not the walk consults key names below the
+        top level. This one puts a harmless value under a sensitive name, where
+        the value policy has nothing to say and the key check is the only thing
+        that can produce `REDACTED`.
+        """
+        event = {"user": {"password": "correct-horse-battery-staple"}}
+        assert redactor().field("payload", event) == {"user": {"password": REDACTED}}
 
     def test_a_cycle_is_marked_rather_than_followed(self) -> None:
         looped: list[Any] = []

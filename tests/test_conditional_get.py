@@ -201,19 +201,48 @@ class TestMalformedFieldMessages:
     """
 
     def test_the_grammar_error_names_if_none_match(self) -> None:
-        with pytest.raises(MalformedPreconditionError, match="If-None-Match"):
+        with pytest.raises(MalformedPreconditionError, match=r"\AIf-None-Match "):
             IfNoneMatch.parse("notatag")
 
     def test_the_separator_error_names_if_none_match(self) -> None:
-        with pytest.raises(MalformedPreconditionError, match="If-None-Match"):
+        with pytest.raises(MalformedPreconditionError, match=r"\AIf-None-Match "):
             IfNoneMatch.parse('"7" "8"')
 
     def test_if_match_still_names_itself(self) -> None:
         """The fix must not swap one wrong header name for another."""
-        with pytest.raises(MalformedPreconditionError, match="If-Match"):
+        with pytest.raises(MalformedPreconditionError, match=r"\AIf-Match "):
             IfMatch.parse("notatag")
 
     def test_the_message_still_quotes_the_offending_value(self) -> None:
         """Naming the header is not a reason to stop saying what was wrong."""
         with pytest.raises(MalformedPreconditionError, match="notatag"):
             IfNoneMatch.parse("notatag")
+
+
+class TestWhatParsingRecords:
+    """Two properties of a parsed field that nothing in this module reads.
+
+    `present` is consumed by the route, not by `matches` or `evaluate`, so a
+    parse that recorded it wrongly would be invisible to every other test in
+    this file and would surface as a route treating a header the client sent as
+    one it did not. And `OWS` is specifically SP and HTAB (RFC 9110 §5.6.3):
+    the wildcard check strips exactly those rather than every character Python
+    calls whitespace, which is the difference between tolerating a space and
+    accepting a header no conforming client could have sent.
+    """
+
+    @pytest.mark.parametrize("raw", ['"7"', '"7", "8"', "*", 'W/"7"'])
+    def test_a_header_that_was_sent_is_recorded_as_present(self, raw: str) -> None:
+        assert IfNoneMatch.parse(raw).present is True
+
+    @pytest.mark.parametrize("raw", ["\n*", "*\n", "\r*", "\f*", "\v*"])
+    def test_a_wildcard_padded_with_other_whitespace_is_not_a_wildcard(
+        self, raw: str
+    ) -> None:
+        with pytest.raises(MalformedPreconditionError):
+            IfNoneMatch.parse(raw)
+
+    @pytest.mark.parametrize("raw", ["\n*", "*\n", "\r*"])
+    def test_if_match_strips_the_same_two_characters(self, raw: str) -> None:
+        with pytest.raises(MalformedPreconditionError):
+            IfMatch.parse(raw)
