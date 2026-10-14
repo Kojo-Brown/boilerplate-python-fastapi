@@ -171,3 +171,41 @@ class TestWidening:
         added = "_".join(f"w{index}" for index in range(longest_builtin + 2))
         policy = KeyPolicy().widened_with(added)
         assert policy.is_sensitive(f"prefix_{added}_suffix")
+
+    def test_a_multi_word_entry_is_one_phrase_and_not_several(self) -> None:
+        """`extra` is split on commas, and only on commas.
+
+        The docstring on `widened_with` says each entry "is split the same way
+        a field name is", which means `employee number` arrives as the
+        two-word phrase `("employee", "number")`. Splitting on whitespace
+        instead would turn it into two one-word phrases, and a one-word
+        `employee` matches every field whose name merely mentions one —
+        `employee_id`, `employee_count`, `employees`. That is the
+        over-matching this module exists to avoid, and it passes any test that
+        only checks the name the operator actually wrote.
+        """
+        policy = KeyPolicy().widened_with("employee number,badge id")
+
+        assert policy.is_sensitive("employee_number")
+        assert policy.is_sensitive("badgeId")
+        assert not policy.is_sensitive("employee_id")
+        assert not policy.is_sensitive("number_of_badges")
+
+
+class TestAnEmptyPolicy:
+    """`KeyPolicy(frozenset())` has to be constructible and answer "no".
+
+    Nothing in `src/` builds one — the default argument is the built-in list
+    and `widened_with` can only add — so this is not a configuration anybody
+    can reach. It is here because `__init__` computes
+    `max(..., default=0)` over the phrases, and `default=` is *only* consulted
+    when the set is empty. Without a case that reaches it, the keyword is
+    unexecuted code: removing it raises `ValueError` from `max`, and making it
+    `None` raises `TypeError` from the `min` in `_scan`, and both look fine in
+    every other test.
+    """
+
+    def test_nothing_is_sensitive(self) -> None:
+        policy = KeyPolicy(frozenset())
+        for key in ("password", "api_key", "authorization", "ssn", ""):
+            assert not policy.is_sensitive(key)

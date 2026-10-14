@@ -92,6 +92,33 @@ class TestTheEventDict:
         assert event["timestamp"] == "2026-01-01T00:00:00Z"
         assert STRUCTURAL_KEYS == frozenset({"level", "timestamp", "exc_info"})
 
+    def test_a_structural_value_the_redactor_would_rewrite_is_still_left_alone(
+        self, processor: RedactionProcessor
+    ) -> None:
+        """`exc_info` passes through by identity, not just by equality.
+
+        The test above sets `exc_info=True`, and a bool is one of the types the
+        walk returns untouched anyway — so it passes whether or not
+        `STRUCTURAL_KEYS` is consulted at all. The real value is structlog's
+        three-tuple, and the walk has plenty to say about a tuple: it rebuilds
+        it, and it renders each member through `str()` to run the value
+        detectors over it. Here the exception's message carries an address, so
+        the member comes back as a redacted *string* where
+        `structlog.processors.format_exc_info` expects an exception — the
+        traceback is then gone from the log, which is the one line anybody
+        reading an error log actually wants.
+
+        Identity is the assertion that states the contract: this value is the
+        renderer's instruction and is not ours to touch.
+        """
+        exc_info = (
+            ValueError,
+            ValueError("upstream rejected the token for ada@example.com"),
+            None,
+        )
+        event = processor(None, "error", an_event(exc_info=exc_info))
+        assert event["exc_info"] is exc_info
+
     def test_a_clean_event_comes_out_identical(
         self, processor: RedactionProcessor
     ) -> None:

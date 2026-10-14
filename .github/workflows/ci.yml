@@ -243,10 +243,76 @@ jobs:
           file: coverage.xml
           fail_ci_if_error: false
 
+  mutation:
+    name: Mutation score (mutmut)
+    runs-on: ubuntu-latest
+    needs: lint
+
+    # No service containers, unlike `test`. The eight modules under
+    # `only_mutate` are pure decision logic and the seven test files that cover
+    # them touch no Postgres, Redis or Kafka — `tests/conftest.py` sets its own
+    # environment defaults, so the selection runs against nothing at all. That
+    # is also why this job is minutes rather than hours: it is not the suite.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      # uv fetches the interpreter from a python-build-standalone GitHub
+      # release, which answered 503 on the first run of PR #32 and failed the
+      # job before a line of this repo was read. Three attempts with a short
+      # backoff: a real outage still fails the build, a blip no longer does.
+      # The rerun and workflow-dispatch APIs both answer 403 to the automation
+      # token, so the alternative to this is a push per transient failure.
+      - name: Set up Python
+        run: |
+          for attempt in 1 2 3; do
+            if uv python install "$PYTHON_VERSION"; then
+              exit 0
+            fi
+            echo "::warning::uv python install failed (attempt $attempt/3), retrying"
+            sleep $((attempt * 5))
+          done
+          exit 1
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev --frozen
+
+      # mutmut forks a worker per mutant, so this step is POSIX-only; it is the
+      # reason the job is pinned to ubuntu rather than a matrix.
+      - name: Run mutmut
+        run: uv run mutmut run
+
+      - name: Export the mutation stats
+        run: uv run mutmut export-cicd-stats
+
+      # The gate. `mutmut run` above exits 0 whether or not mutants survived —
+      # it reports rather than blocks — so this is the step that can fail.
+      - name: Check the mutation score against the threshold
+        run: uv run python scripts/check_mutation_score.py
+
+      # Uploaded on failure too, and especially then: the stats name the
+      # buckets but not the mutants, and `mutants/**/*.meta` is what
+      # `mutmut results` and `mutmut show <mutant>` read to say which lines
+      # survived. Without it a contributor can only reproduce the run locally.
+      - name: Upload the mutation results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-results
+          path: |
+            mutants/mutmut-cicd-stats.json
+            mutants/**/*.meta
+          retention-days: 7
+
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
-    needs: [typecheck, test]
+    needs: [typecheck, test, mutation]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     permissions:

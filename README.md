@@ -432,3 +432,27 @@ each was closed, and the two HTTP status codes it changed.
 
 ## Spec Progress
 See [SPEC.md](./SPEC.md).
+
+## Mutation testing
+[docs/mutation-testing.md](./docs/mutation-testing.md) — mutmut over eight
+pure-logic modules, with a 95% floor enforced by
+`scripts/check_mutation_score.py` in the `mutation` CI job. Coverage says a line
+ran; it does not say anything ran *because* of it, and `len(items) > limit`
+becoming `>=` is a page that drops a row with 100% coverage on the file. The
+scope is an allow list rather than the whole of `src/`, because a survivor is
+only informative where it means a missing assertion — pure decision logic, no
+I/O — and mutating 214 modules would spend hours to report that a log level
+changed. Three config lines are load-bearing and the document says why, the
+first being `--no-cov`: `addopts` carries `--cov-fail-under=80`, the selected
+subset covers nowhere near that, and mutmut reads a non-zero exit as "killed" —
+so without it the gate reports a perfect score while testing nothing. `mutmut
+run` itself always exits 0, which is why the threshold is a separate script with
+its own tests. It also needed an import shim: mutmut 3 assumes `src/` is a layout
+whose packages are imported without the prefix, and here `src` *is* the package,
+so its mutant keys and its trampoline disagree about every function. Writing it
+found eight real gaps, including a Luhn check passing with a third of its body
+unexecuted, a `pytest.raises(match=...)` that an `XX`-wrapped mutant satisfied,
+and — in a test added *for* this gate — one that asserted nothing it claimed to,
+because the word "token" in its fixture made a different detector fire first.
+Fifteen mutants survive and the document argues one by one why each is equivalent
+rather than untested.
