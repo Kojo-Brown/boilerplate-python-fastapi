@@ -456,3 +456,26 @@ and — in a test added *for* this gate — one that asserted nothing it claimed
 because the word "token" in its fixture made a different detector fire first.
 Fifteen mutants survive and the document argues one by one why each is equivalent
 rather than untested.
+
+## Property-based testing
+[docs/property-based-testing.md](./docs/property-based-testing.md) — Hypothesis
+over `src/pagination.py` and every request and response schema, 32 properties in
+two modules, run inside the existing `test` job at 500 examples each. An example
+test asserts a fact about one input; these assert one about every input, and
+shrink a counterexample to its smallest form before reporting it. They were
+added where a requirement is stated over a range rather than at a point, which
+turned out to be three places. One spans calls: taking a cursor from the
+overflow sentinel instead of the last included row returns a perfectly
+well-formed page and silently never delivers one row, so every single-page
+assertion passes — the traversal property that follows cursors to the end of the
+dataset is the only thing in the repository that fails on it. One is a boundary,
+where the schema properties are stated as equivalences (*accepted exactly when*)
+so that `min_length=8` quietly becoming `7` is a failure rather than a slightly
+weaker API; the lengths are generated length-first, because
+`st.text(max_size=140)` reaches a 128-character bound approximately never and a
+boundary property that fires one run in three is worse than none. One is the
+round trip: what the handler built is what the client parses, asserted over an
+arbitrary instance of every schema. Every property was validated by breaking the
+implementation and watching it catch it. They are deliberately **not** in the
+mutation gate, and the document argues why: a threshold has to produce the same
+number twice, and the only pagination mutant still surviving is equivalent.

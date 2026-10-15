@@ -78,6 +78,14 @@ dev-dependencies = [
     # shipping it one day should be a resolver error rather than a collection
     # error in CI.
     "websockets>=15.0",
+    # Property-based testing (see docs/property-based-testing.md). Hypothesis
+    # generates the inputs rather than taking them from a list, so the suite
+    # states what must hold for *every* input instead of for the dozen somebody
+    # thought of — and shrinks a failure to the smallest input that still
+    # reproduces it before reporting. Used by `tests/test_pagination_properties.py`
+    # and `tests/test_serializer_properties.py`; the profiles are registered in
+    # `tests/conftest.py`.
+    "hypothesis>=6.170.0",
     # Mutation testing (see docs/mutation-testing.md and the `mutation` CI job).
     # mutmut 3 forks a worker per mutant, so it is POSIX-only; the gate job runs
     # on ubuntu-latest for that reason and nothing else in the suite needs it.
