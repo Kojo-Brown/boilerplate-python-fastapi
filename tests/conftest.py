@@ -57,6 +57,7 @@ import logging
 import pytest
 import structlog
 from httpx import ASGITransport, AsyncClient
+from hypothesis import settings as hypothesis_settings
 from pytest_factoryboy import register
 from sqlalchemy import Engine
 from structlog.testing import LogCapture
@@ -101,6 +102,50 @@ register(RefreshTokenFactory)
 # the honest statement of what the suite assumes: *all* work in this process
 # happens inside a tenant.
 bind_tenant_on_begin(Engine)
+
+
+# --- Hypothesis profiles (docs/property-based-testing.md) -------------------
+#
+# Selected with `HYPOTHESIS_PROFILE`; `dev` is the default because the number
+# that belongs in a local run is not the number that belongs in CI. A
+# property-based test costs its example count in runtime, so the trade is
+# between a fast edit-run loop and a wide search, and the two environments want
+# opposite ends of it.
+#
+# `deadline=None` in both, which is the one setting here that could be mistaken
+# for carelessness. Hypothesis times each example and fails the test if one
+# takes longer than 200ms, and the first example of a property paid for by this
+# suite is not timing the property: it is paying for a Pydantic core schema to
+# be built, a validator to be compiled, an `email_validator` import. That cost
+# lands on whichever example happens to be first and on no other, which is a
+# flake whose frequency depends on test order. The properties here are
+# microseconds of pure validation with no I/O in them at all, so a per-example
+# time limit is protecting against nothing — and `max_examples` already bounds
+# the total. A property that *should* be fast and is not would be caught by the
+# suite's own wall-clock, not by a limit that fires on one example in a hundred.
+hypothesis_settings.register_profile(
+    # A local run, where the point is a fast loop and the example database makes
+    # the search cumulative: Hypothesis replays previously-failing examples
+    # first, so a bug found once is re-checked on every later run for free.
+    "dev",
+    max_examples=50,
+    deadline=None,
+    print_blob=True,
+)
+hypothesis_settings.register_profile(
+    # CI, where the point is the search. Ten times the examples, and no example
+    # database: the runner is thrown away, so a database would be written,
+    # never read, and silently suggest a cumulative search that is not
+    # happening. `print_blob` is what makes a CI failure reproducible —
+    # the output carries a blob to paste into `@reproduce_failure`, which is
+    # otherwise a seed nobody has.
+    "ci",
+    max_examples=500,
+    deadline=None,
+    database=None,
+    print_blob=True,
+)
+hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 
 @pytest.fixture(autouse=True)

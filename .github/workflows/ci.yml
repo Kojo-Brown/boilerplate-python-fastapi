@@ -182,6 +182,13 @@ jobs:
       # so it has to be set before `alembic upgrade head`.
       ENCRYPTION_KEYS: ci:aW5zZWN1cmUtY2kta2V5LW5vdC1mb3ItcmVhbC11c2U=
       ENCRYPTION_ACTIVE_KEY_ID: ci
+      # Which Hypothesis profile the property-based tests run under
+      # (tests/conftest.py registers them; docs/property-based-testing.md has
+      # the reasoning). `ci` is ten times the local example count and no
+      # example database — the runner is discarded, so a database here would
+      # be written, never read, and would imply a cumulative search that is
+      # not happening. Measured cost of the difference: about 20 seconds.
+      HYPOTHESIS_PROFILE: ci
 
     steps:
       - uses: actions/checkout@v4

@@ -18,6 +18,12 @@ htmlcov/
 # the repository root for anybody who follows them.
 dump.rdb
 
+# Hypothesis's example database: the inputs that previously failed a
+# property-based test, replayed first on the next run so a bug found once stays
+# found. It is a cache of this machine's search, not a shared artifact — the
+# `ci` profile disables it outright — and the suite is correct without it.
+.hypothesis/
+
 # mutmut copies the whole project here, mutates the copy, and keeps its cache,
 # its per-file `.meta` results and its exported stats alongside. Nothing in it
 # is source — deleting it just forces the next `mutmut run` to be a full one.
