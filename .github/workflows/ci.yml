@@ -163,6 +163,16 @@ jobs:
 
     # Throwaway values for ephemeral CI services. Never reuse these anywhere.
     env:
+      # Talk to the services declared above and never start a container.
+      # `tests/containers.py` would otherwise find them already listening and
+      # reuse them anyway, so this is a statement rather than a behaviour
+      # change — but it is the statement that keeps this job's three
+      # pre-pytest steps honest. `alembic upgrade head`, the import check and
+      # `scripts/smoke_start.py` all run outside the pytest process and need a
+      # server that outlives it, which a Testcontainers container is not.
+      # See docs/integration-testing.md; the `integration` job below is where
+      # the container path is measured.
+      INTEGRATION_BACKEND: external
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/boilerplate_test
       SECRET_KEY: ci-test-secret-key-not-for-production
       ALGORITHM: HS256
@@ -250,6 +260,108 @@ jobs:
           file: coverage.xml
           fail_ci_if_error: false
 
+  integration:
+    name: Integration (Testcontainers)
+    runs-on: ubuntu-latest
+    needs: lint
+
+    # Deliberately no `services:` block, and that absence is the job. The
+    # `test` job above declares a Postgres and a Redis, so the fourteen modules
+    # that need a real server find one there whether or not
+    # `tests/containers.py` works. This job gives them nothing, sets
+    # `INTEGRATION_BACKEND=testcontainers`, and so measures the path a
+    # developer actually runs on: the suite starting its own servers.
+    #
+    # It is not redundant with `test`. Before this existed, those 316 tests ran
+    # in exactly one environment, and the Phase 0 note in SPEC.md records what
+    # that cost — `test_distributed_lock_redis.py` was red locally for weeks
+    # while CI was green. This job is the one that would have caught it.
+    #
+    # `testcontainers` rather than `auto` because `auto` would skip on a runner
+    # without a usable Docker daemon, and a job that goes green having run
+    # nothing is the failure mode this whole item exists to remove.
+
+    env:
+      INTEGRATION_BACKEND: testcontainers
+      # No DATABASE_URL and no REDIS_URL, which is the point: the suite
+      # publishes both itself after starting the containers. Everything else
+      # `src/config.py` validates comes from `tests/conftest.py`'s own
+      # `setdefault` block, which is also what the `alembic upgrade head`
+      # subprocess inherits — so this job needs no secrets and no database
+      # configuration at all. See docs/integration-testing.md.
+      ENVIRONMENT: test
+      LOG_LEVEL: WARNING
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      # Same three-attempt retry as every other job: uv fetches the interpreter
+      # from a python-build-standalone GitHub release, which has answered 503.
+      - name: Set up Python
+        run: |
+          for attempt in 1 2 3; do
+            if uv python install "$PYTHON_VERSION"; then
+              exit 0
+            fi
+            echo "::warning::uv python install failed (attempt $attempt/3), retrying"
+            sleep $((attempt * 5))
+          done
+          exit 1
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev --frozen
+
+      # Fail here, with a diagnosable message, rather than inside a pytest
+      # collection error if the runner image ever ships without a daemon.
+      - name: Confirm a Docker daemon is reachable
+        run: docker version
+
+      # The fourteen modules whose subject is the interaction with a real
+      # server. Listed rather than globbed: a glob over `*_db.py` and
+      # `*redis*.py` would silently stop covering a module renamed outside the
+      # pattern, and this list failing to collect is a far better signal than
+      # this job quietly shrinking.
+      #
+      # `--no-cov` because the `test` job owns the coverage gate: a 15-module
+      # subset is nowhere near the 80% floor in `[tool.pytest.ini_options]`, so
+      # leaving coverage on would fail this job for measuring less than the
+      # whole suite.
+      #
+      # The run is teed and then checked for skips. Under this backend a skip
+      # can only mean a server was missing and the suite carried on regardless
+      # — which is the precise failure this job exists to refuse, and the one
+      # that is invisible in a green summary line. `pytest` has no
+      # `--error-on-skip`, and `-rs` makes the reason legible when it fires.
+      # `set -o pipefail` because `tee` would otherwise mask a non-zero pytest.
+      - name: Run the integration suite against its own containers
+        run: |
+          set -o pipefail
+          uv run pytest --no-cov -rs \
+            tests/test_tenancy_db.py \
+            tests/test_encryption_db.py \
+            tests/test_locking_db.py \
+            tests/test_observability_db.py \
+            tests/test_optimistic_concurrency_db.py \
+            tests/test_outbox_db.py \
+            tests/test_streaming_db.py \
+            tests/test_idempotency_redis.py \
+            tests/test_idempotency_contract.py \
+            tests/test_webhook_replay_redis.py \
+            tests/test_distributed_lock_redis.py \
+            tests/test_distributed_lock_contract.py \
+            tests/test_redis_streams_redis.py \
+            tests/test_redis_streams_contract.py \
+            tests/test_containers.py 2>&1 | tee "$RUNNER_TEMP/integration.log"
+          if grep -qE "[0-9]+ skipped" "$RUNNER_TEMP/integration.log"; then
+            echo "::error::tests skipped under INTEGRATION_BACKEND=testcontainers, which means a server was unavailable and the suite carried on anyway"
+            exit 1
+          fi
+
   mutation:
     name: Mutation score (mutmut)
     runs-on: ubuntu-latest
@@ -260,6 +372,13 @@ jobs:
     # them touch no Postgres, Redis or Kafka — `tests/conftest.py` sets its own
     # environment defaults, so the selection runs against nothing at all. That
     # is also why this job is minutes rather than hours: it is not the suite.
+
+    # And no containers either. `tests/containers.py` already returns early
+    # when `mutmut` is in `sys.modules`, which is what makes a local
+    # `uv run mutmut run` behave the same way; this states it for the job as
+    # well, so the gate does not depend on a Docker daemon it has no use for.
+    env:
+      INTEGRATION_BACKEND: external
 
     steps:
       - uses: actions/checkout@v4
@@ -319,7 +438,7 @@ jobs:
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
-    needs: [typecheck, test, mutation]
+    needs: [typecheck, test, integration, mutation]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     permissions:
