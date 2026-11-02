@@ -6,13 +6,17 @@ from datetime import UTC, datetime
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
 
-# Must be set before any application imports so pydantic-settings can validate
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
+from tests.containers import last_provisioned, provision
+
+# Must be set before any application imports so pydantic-settings can validate.
+#
+# `DATABASE_URL` and `REDIS_URL` are deliberately *not* here: they are set after
+# `provision()` below, and the three-way split of this block is load-bearing
+# rather than cosmetic. See the comment on that call.
 os.environ.setdefault("SECRET_KEY", secrets.token_hex(32))
 os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 os.environ.setdefault("REFRESH_TOKEN_EXPIRE_DAYS", "7")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 # The app under test gets the in-process idempotency store, so importing
 # `src.main` never opens a Redis connection pool and the suite runs without a
 # server. The Redis store itself is covered directly, against a real server,
@@ -51,6 +55,43 @@ os.environ.setdefault(
     "ENCRYPTION_KEYS", "test:aW5zZWN1cmUtZGV2ZWxvcG1lbnQta2V5LW5vdHJlYWw="
 )
 os.environ.setdefault("ENCRYPTION_ACTIVE_KEY_ID", "test")
+
+# Real Postgres and Redis for the fourteen modules that need them, started here
+# if nothing is already listening and Docker can oblige. `INTEGRATION_BACKEND`
+# selects the behaviour and `external` makes this a no-op. See
+# `tests/containers.py` and `docs/integration-testing.md`.
+#
+# The position is the whole of the subtlety, and it is pinned on both sides.
+#
+# **Below everything above it.** Starting a container means running `alembic
+# upgrade head` against it, in a subprocess that imports `src.config` and so
+# must find a `SECRET_KEY` and an `ENCRYPTION_KEYS` to validate. Those come from
+# the defaults above. Run higher up, this call would crash collection on any
+# machine with Docker and no `.env` — a machine whose suite works today.
+#
+# **Above the two lines below it, and above every `src.*` import.** The URLs it
+# publishes are read off frozen state afterwards: `src.config` builds its
+# settings singleton at import time, and the Redis modules read `os.environ` at
+# *their* import, during collection. A `setdefault` for either URL placed before
+# this call would also win over it.
+#
+# So the two URLs are excluded from the block above and defaulted in the block
+# below: `provision()` sees them only when they were genuinely configured — by
+# CI, or by a developer's export — rather than seeing a placeholder it would
+# then probe `localhost` for.
+#
+# `os.environ.update(...)` rather than an assignment, and `provision()` returns
+# the mapping rather than writing it, for the reason given on
+# `Provisioned.environment`: ruff's E402 tolerates an `os.environ` mutation
+# above a module's imports and nothing else, so a bare call here would make all
+# 21 imports below it errors.
+os.environ.update(provision().environment)
+
+# The fallbacks for a run that provisioned nothing: no servers, no Docker, and
+# therefore the per-test reachability guards skipping, exactly as before this
+# module existed. `setdefault`, so a URL `provision()` just published wins.
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import logging
 
@@ -146,6 +187,24 @@ hypothesis_settings.register_profile(
     print_blob=True,
 )
 hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
+
+
+def pytest_report_header() -> list[str]:
+    """State which servers this run is talking to, and how it got them.
+
+    A silent decision is what made the gap in `tests/containers.py` expensive:
+    a developer reading `121 passed, 195 skipped` had no indication that the
+    skips were a missing server rather than a deliberate exclusion. One line at
+    the top of every run removes that.
+    """
+    provisioned = last_provisioned()
+    lines = [
+        f"integration backend: {provisioned.actions['postgres'].value} postgres, "
+        f"{provisioned.actions['redis'].value} redis"
+    ]
+    if provisioned.started:
+        lines.append(f"containers started: {', '.join(provisioned.started)}")
+    return lines
 
 
 @pytest.fixture(autouse=True)

@@ -86,6 +86,27 @@ dev-dependencies = [
     # and `tests/test_serializer_properties.py`; the profiles are registered in
     # `tests/conftest.py`.
     "hypothesis>=6.170.0",
+    # Testcontainers (see docs/integration-testing.md and the `integration` CI
+    # job). The DB- and Redis-backed modules in this suite talk to real servers
+    # and skip when none is listening; this is what lets them bring their own
+    # instead, so the 195 tests that gate a merge also run on a developer's
+    # machine.
+    #
+    # No extras, which is deliberate and not a saving. `testcontainers[redis]`
+    # requires `redis>=7` and this project resolves to `redis==6.4.0` —
+    # `celery[redis]` pulls `kombu[redis]`, which caps it at `<6.5` — so the
+    # extra is simply unsatisfiable here, and `uv sync` fails to resolve rather
+    # than installing anything. `[postgres]` would resolve, but it declares no
+    # requirements at all and `PostgresContainer` reaches for a *sync* driver
+    # this repo does not have (`asyncpg` is the only one declared).
+    #
+    # So `tests/containers.py` builds both services from the core
+    # `DockerContainer` and probes readiness with `asyncpg` and
+    # `redis.asyncio` — the clients the application itself uses, which is the
+    # better probe anyway: it proves the driver can connect, not just that a
+    # port is open. Core needs only `docker`, `python-dotenv`,
+    # `typing-extensions`, `urllib3` and `wrapt`.
+    "testcontainers>=4.15.0",
     # Mutation testing (see docs/mutation-testing.md and the `mutation` CI job).
     # mutmut 3 forks a worker per mutant, so it is POSIX-only; the gate job runs
     # on ubuntu-latest for that reason and nothing else in the suite needs it.
@@ -146,6 +167,21 @@ exclude = ["^mutants/"]
 # separate module.
 [[tool.mypy.overrides]]
 module = ["aiokafka.*"]
+ignore_missing_imports = true
+
+# `docker` and `asyncpg` ship no `py.typed` marker, so under strict mode every
+# import of them is an error rather than an untyped symbol — the same situation
+# as `aiokafka` above, and silenced the same way for the same reasons.
+#
+# The blast radius is `tests/containers.py` and nothing else: neither package is
+# imported anywhere under `src/` or `scripts/`, which are what the `typecheck`
+# CI job checks. `asyncpg` reaches the application only as SQLAlchemy's driver,
+# behind SQLAlchemy's own typed API, and `docker` is a test-only dependency that
+# arrives with `testcontainers`. Both are used in one function apiece there — a
+# readiness probe and a daemon ping — each of which narrows what it gets back to
+# a `bool` before returning it, so no `Any` escapes the module.
+[[tool.mypy.overrides]]
+module = ["docker.*", "asyncpg.*"]
 ignore_missing_imports = true
 
 # --- Mutation testing (docs/mutation-testing.md, the `mutation` CI job) -------
