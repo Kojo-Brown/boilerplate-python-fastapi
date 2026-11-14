@@ -41,10 +41,10 @@ Production-grade FastAPI + Python 3.14 async API boilerplate. Spec-driven and PR
    things that bite are that a task name is declared in
    `scripts/check_load_budget.py` and imported by the locustfile, so a name the
    budget table has never heard of fails the gate rather than going unmeasured;
-   and that the budgets carry about fifteenfold headroom over the measured
-   numbers because the job shares a runner with the server it is measuring, so a
-   breach is a real regression and never something to turn green by raising a
-   ceiling.
+   and that the budgets carry seven to twelvefold headroom over the worse of two
+   measurements, the CI runner's and a developer machine's, because the job
+   shares a runner with the server it is measuring — so a breach is a real
+   regression and never something to turn green by raising a ceiling.
 6. Commit, `git push -u origin <branch>`, then `gh pr create`.
 7. `gh pr checks --watch` → **merge only if every check is green**:
    `gh pr merge --squash --delete-branch`

@@ -499,10 +499,11 @@ was authorised. The gate refuses three more things that each let a load test
 pass having measured nothing: a budgeted name missing from the stats, a measured
 name with no budget, and fewer requests than the per-name floor — plus locust's
 `N/A` percentile, which read as a zero would make a path that answered nothing
-post the best number in the table. Budgets carry roughly fifteenfold headroom
-over the measured numbers because the job shares a runner with the server it
-measures; they catch the change that moves a response time by a multiple, and a
-gate that fires on noise gets switched off. The 200 and the 304 share a ceiling
+post the best number in the table. Budgets carry seven to twelvefold headroom
+over the worse of two measurements — the CI runner's and a developer machine's,
+which differ by about a factor of two — because the job shares a runner with the
+server it measures; they catch the change that moves a response time by a
+multiple, and a gate that fires on noise gets switched off. The 200 and the 304 share a ceiling
 rather than the 304 being budgeted lower, and the document explains why that is
 the honest reading at a 190-byte payload. Writing it also found a real bug: the
 runner took `smoke_start.serve`'s default stdout pipe, nobody drained it, and at

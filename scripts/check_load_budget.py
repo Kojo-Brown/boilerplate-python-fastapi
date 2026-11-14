@@ -8,10 +8,10 @@ the budget has to live somewhere else. This reads the `_stats.csv` that
 `scripts/check_mutation_score.py` already uses for the mutation gate, and for
 the same reason.
 
-**The budgets below are regression bounds, not an SLO.** They are set from a
-measured run with headroom over it, because the job runs on a shared runner
-where locust, uvicorn and Postgres compete for the same cores and a percentile
-is a noisy statistic. What they catch is the change that moves a
+**The budgets below are regression bounds, not an SLO.** They are set from
+measured runs with headroom over the worst of them, because the job runs on a
+shared runner where locust, uvicorn and Postgres compete for the same cores and
+a percentile is a noisy statistic. What they catch is the change that moves a
 response time by a multiple: an N+1 query added to a read path, a dependency
 check made synchronous, a middleware that now hashes something per request.
 What they deliberately do not catch is a 30% drift, which on this hardware
@@ -87,29 +87,38 @@ PROFILE_REVALIDATE: Final[str] = "GET /api/v1/users/me (If-None-Match)"
 
 #: One entry per request name above. Measured values and the reasoning for each
 #: ceiling are in `docs/load-testing.md`; the short version is below.
+# Each ceiling is roughly seven to twelve times the worst p95 observed across
+# the runs recorded in `docs/load-testing.md` — this job's own runner, which
+# measured 1/2/5/5ms, and a developer machine over four runs, whose worst was
+# 2/5/11/11ms. The multiple is what the hardware spread buys: the tail on the
+# runner reaches ~90ms at the 99.9th percentile, so single slow requests happen
+# and the gate must not fire on a handful of them, but a p95 moving past these
+# numbers needs one request in twenty to be slow, which is a change and not a
+# mood.
 BUDGETS: Final[dict[str, Budget]] = {
     # No dependency, no authentication: the cost of the middleware stack and
     # the router. This is the floor the other three are read against, and the
     # one that moves when something is added to every request's path.
-    # Measured p95 2ms.
-    HEALTH: Budget(p95_ms=50.0, min_requests=400),
+    # Worst measured p95 2ms.
+    HEALTH: Budget(p95_ms=25.0, min_requests=400),
     # Adds a live round trip to every configured dependency — a `SELECT 1` on
     # the async engine and a Redis `PING`. The gap to `/health` is what a
     # readiness check costs, and a check made serial or unpooled shows up here
-    # before it shows up anywhere a user can see. Measured p95 4ms.
-    READY: Budget(p95_ms=75.0, min_requests=400),
+    # before it shows up anywhere a user can see. Worst measured p95 5ms.
+    READY: Budget(p95_ms=40.0, min_requests=400),
     # The real read path: bearer decode, the tenant `set_config` statement, the
     # row fetch, an encrypted column decrypted, the entity tag, serialisation.
-    # Measured p95 8ms.
-    PROFILE: Budget(p95_ms=125.0, min_requests=1200),
+    # Worst measured p95 11ms.
+    PROFILE: Budget(p95_ms=75.0, min_requests=1200),
     # The same work, answered 304 from the validator instead of serialising a
     # body. Budgeted at the same ceiling as the unconditional read and **not**
     # below it, which is worth stating because the opposite is the tempting
     # mistake: `docs/conditional-get.md` claims revalidation is cheaper, and at
     # this payload — a profile is about 190 bytes — the saving is in bytes on
-    # the wire, not in milliseconds. Both measure a p95 of 8ms here, so a
-    # ceiling that encoded "the 304 must be faster" would be gating on noise.
-    PROFILE_REVALIDATE: Budget(p95_ms=125.0, min_requests=1200),
+    # the wire, not in milliseconds. The two measure within a millisecond of
+    # each other on both machines, so a ceiling that encoded "the 304 must be
+    # faster" would be gating on noise.
+    PROFILE_REVALIDATE: Budget(p95_ms=75.0, min_requests=1200),
 }
 
 #: The CSV columns this script reads, by the header locust writes them under.

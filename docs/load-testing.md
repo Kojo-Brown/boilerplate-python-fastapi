@@ -109,20 +109,30 @@ printed.
 
 `BUDGETS` in `scripts/check_load_budget.py`:
 
-| Request name | Measured p95 | Budget | Request floor |
-| --- | --- | --- | --- |
-| `GET /health` | 2ms | 50ms | 400 |
-| `GET /health/ready` | 4ms | 75ms | 400 |
-| `GET /api/v1/users/me` | 8ms | 125ms | 1200 |
-| `GET /api/v1/users/me (If-None-Match)` | 8ms | 125ms | 1200 |
+| Request name | p95 on CI | worst p95 locally | Budget | Request floor |
+| --- | --- | --- | --- | --- |
+| `GET /health` | 1ms | 2ms | 25ms | 400 |
+| `GET /health/ready` | 2ms | 5ms | 40ms | 400 |
+| `GET /api/v1/users/me` | 5ms | 11ms | 75ms | 1200 |
+| `GET /api/v1/users/me (If-None-Match)` | 5ms | 11ms | 75ms | 1200 |
 
-Measured with the command at the top of this file on a four-core machine with
-Postgres 16 and Redis on localhost: 9,195 requests, 0 failures, aggregate p95
-7ms.
+Both columns come from the command at the top of this file. **CI**
+(`ubuntu-latest`, Postgres 17 and Redis as service containers): 9,233 requests,
+0 failures, aggregate p95 4ms. **Locally**, worst of four runs on a four-core
+machine with Postgres 16 and Redis on localhost, ~9,100 requests each, 0
+failures, aggregate p95 between 7 and 10ms. The runner is the faster of the two,
+which is worth knowing before reading a red job as "CI is slow today"; the local
+column is the worst of several runs rather than one, because a developer's
+machine is also doing other things and one sample would understate the spread.
 
-**These are regression bounds, not an SLO,** and the headroom is roughly
-fifteenfold on purpose. The job runs on a shared runner where locust, uvicorn
-and Postgres compete for the same cores, and a percentile is a noisy statistic.
+**These are regression bounds, not an SLO.** Each ceiling is seven to twelve
+times the worse of the two numbers beside it, and the multiple is what the
+hardware spread buys rather than a round number somebody liked. The tail on the
+runner reaches about 90ms at the 99.9th percentile, so single slow requests do
+happen and a gate must not fire on a handful of them; but for a p95 to move past
+these ceilings, one request in twenty has to be slow, which is a change and not
+a mood.
+
 What the budgets catch is the change that moves a response time by a *multiple*:
 an N+1 query added to a read path (`docs/n-plus-one.md`), a dependency check
 made serial, a middleware that now hashes something per request. What they
@@ -134,8 +144,9 @@ then catches nothing at all.
 The tempting version budgets the revalidation *below* the unconditional read,
 because `docs/conditional-get.md` claims revalidation is cheaper. At this
 payload it is not cheaper in time: a profile is about 190 bytes, so the saving
-is bytes on the wire and both measure 8ms. A ceiling encoding "the 304 must be
-faster" would be gating on noise. Re-measure before changing that, on a resource
+is bytes on the wire, and the two measure within a millisecond of each other on
+both machines — sometimes the 304 is the slower of the pair. A ceiling encoding
+"the 304 must be faster" would be gating on noise. Re-measure before changing that, on a resource
 whose representation is large enough for the claim to be about milliseconds.
 
 ### Re-measuring, and changing a budget
