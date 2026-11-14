@@ -258,3 +258,4 @@ calls `HealthRegistry.aclose()` and skips checks that have none.
 | `tests/test_health_checks.py` | `SELECT 1` and `PING`, including a real engine pointed at a closed port. |
 | `tests/test_health_wiring.py` | Which checks a configuration produces, and how critical each is. |
 | `scripts/smoke_start.py` | The whole path against a real Postgres in CI: boot uvicorn, require `ready`, SIGTERM. |
+| `loadtest/locustfile.py` | Both probes under a minute of load, with a p95 ceiling on each — see `docs/load-testing.md`. |

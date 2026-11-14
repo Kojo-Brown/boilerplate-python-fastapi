@@ -128,3 +128,20 @@ scanner (`parse_entity_tag_list` in `src/concurrency/tags.py`, whose `field`
 argument is required precisely so that neither module's name can end up on the
 other's errors), because a comma is a legal `etagc`: `If-None-Match: "a,b"` is
 one tag, and splitting either header on commas is wrong.
+
+## What the saving actually is, measured
+
+`loadtest/locustfile.py` reads `/api/v1/users/me` both ways under a minute of
+load, and the two come out at the same p95 — 8ms each. The 304 is not faster
+here, and saying otherwise would be the comfortable version rather than the true
+one: at a 190-byte representation the work this protocol removes is the body on
+the wire, not the handler's time. Everything above the `return` happens either
+way — the bearer decode, the tenant binding, the row fetch, the decryption, the
+tag.
+
+The saving is bytes and client-side work, and it grows with the representation.
+On something large enough for the serialisation to dominate — an export, a long
+collection page — the two numbers separate, and that is when a latency budget
+has something to say about it. `scripts/check_load_budget.py` therefore gives
+both the same ceiling, with the reasoning recorded next to it in
+`docs/load-testing.md`.

@@ -34,7 +34,7 @@ import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import IO, Any, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -76,8 +76,27 @@ def _probe(url: str, timeout: float = 5.0) -> ProbeResult:
 
 
 @contextmanager
-def _server(port: int) -> Iterator[subprocess.Popen[str]]:
-    """Run uvicorn for the duration of the block, always reaping the process."""
+def serve(
+    port: int, *, output: int | IO[str] = subprocess.PIPE
+) -> Iterator[subprocess.Popen[str]]:
+    """Run uvicorn for the duration of the block, always reaping the process.
+
+    Public, like `wait_for_liveness` below, because `scripts/run_load_test.py`
+    needs exactly this: the real server as the Dockerfile starts it, held up
+    for the duration of a block and reaped however the block ends. Two copies
+    of process management is one too many, and the second copy is the one that
+    leaks a uvicorn on a failure path.
+
+    ``output`` is where the server's combined stdout/stderr goes, and a caller
+    that is about to send more than a handful of requests must pass a file
+    rather than take the default. The default is a pipe, which suits this
+    module — a smoke test makes three requests and `_drain` reads the pipe on
+    the failure path — but uvicorn writes an access-log line per request, and a
+    pipe nobody is reading holds about 64 KiB before the *writer* blocks. The
+    server then stops answering and never shuts down, with no error anywhere
+    and a process that ignores SIGTERM. That is not hypothetical: it is what
+    `scripts/run_load_test.py` did on its first run, after about 700 requests.
+    """
     process = subprocess.Popen(
         [
             sys.executable,
@@ -94,7 +113,7 @@ def _server(port: int) -> Iterator[subprocess.Popen[str]]:
             "1",
         ],
         cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
+        stdout=output,
         stderr=subprocess.STDOUT,
         text=True,
     )
@@ -121,21 +140,29 @@ def _drain(process: subprocess.Popen[str]) -> str:
         except subprocess.TimeoutExpired:  # pragma: no cover - kill(2) not reaped
             return "<server would not die; output unavailable>"
 
-    if process.stdout is None:  # pragma: no cover - stdout is always a pipe here
-        return "<no output captured>"
+    # Reachable whenever `serve` was given somewhere other than a pipe to write
+    # to; the caller that did that knows where the output went and says so.
+    if process.stdout is None:
+        return "<no output captured; the server's log went where the caller sent it>"
     try:
         return process.stdout.read() or "<no output>"
     except OSError:  # pragma: no cover - only on an already-closed pipe
         return "<output unavailable>"
 
 
-def _wait_for_liveness(
+def wait_for_liveness(
     process: subprocess.Popen[str],
     base_url: str,
     timeout: float,
     poll_interval: float,
 ) -> None:
-    """Block until ``/health`` answers 200, the server dies, or the deadline passes."""
+    """Block until ``/health`` answers 200, the server dies, or the deadline passes.
+
+    Public for the same reason as `serve`: `scripts/run_load_test.py` must not
+    start sending load at a socket that is accepting but whose lifespan has not
+    finished — the first few requests would pay for a cold connection pool and
+    land in the percentiles the budget is read from.
+    """
     deadline = time.monotonic() + timeout
     last_error = "no response yet"
 
@@ -253,8 +280,8 @@ def _assert_clean_shutdown(process: subprocess.Popen[str]) -> None:
 def run_smoke_test(port: int, timeout: float, poll_interval: float) -> None:
     base_url = f"http://127.0.0.1:{port}"
 
-    with _server(port) as process:
-        _wait_for_liveness(process, base_url, timeout, poll_interval)
+    with serve(port) as process:
+        wait_for_liveness(process, base_url, timeout, poll_interval)
         print(f"✓ app started and /health answered on {base_url}")
 
         _assert_ready(process, base_url)

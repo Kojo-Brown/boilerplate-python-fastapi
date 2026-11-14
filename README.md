@@ -479,3 +479,33 @@ arbitrary instance of every schema. Every property was validated by breaking the
 implementation and watching it catch it. They are deliberately **not** in the
 mutation gate, and the document argues why: a threshold has to produce the same
 number twice, and the only pagination mutant still surviving is equivalent.
+
+## Load testing
+[docs/load-testing.md](./docs/load-testing.md) — locust against four read paths
+for a minute on every pull request, with a 95th-percentile ceiling per endpoint
+enforced by `scripts/check_load_budget.py` in the `load` CI job. `locust
+--headless` exits non-zero when a *request* failed and exits 0 at any response
+time whatsoever, so the budget is a separate script reading the CSV — the same
+measure-then-gate split as mutmut, for the same reason. Both halves are one
+command each and both run locally, which is not a convenience: this repository
+has already paid once for a gate only CI could run. The four names are
+`/health` (nothing but the middleware stack), `/health/ready` (a live round trip
+to every dependency), `/api/v1/users/me`, and the same URI with
+`If-None-Match` — the gaps between them are the point, and the fourth requires
+**304** rather than "2xx or 304" so it cannot quietly become a duplicate of the
+third. Every task asserts its own status, because a 401 is fast and empty and a
+budget on latency alone passes with flying colours against a run where nothing
+was authorised. The gate refuses three more things that each let a load test
+pass having measured nothing: a budgeted name missing from the stats, a measured
+name with no budget, and fewer requests than the per-name floor — plus locust's
+`N/A` percentile, which read as a zero would make a path that answered nothing
+post the best number in the table. Budgets carry seven to twelvefold headroom
+over the worse of two measurements — the CI runner's and a developer machine's,
+which differ by about a factor of two — because the job shares a runner with the
+server it measures; they catch the change that moves a response time by a
+multiple, and a gate that fires on noise gets switched off. The 200 and the 304 share a ceiling
+rather than the 304 being budgeted lower, and the document explains why that is
+the honest reading at a 190-byte payload. Writing it also found a real bug: the
+runner took `smoke_start.serve`'s default stdout pipe, nobody drained it, and at
+about 700 access-log lines the server blocked on the write, stopped answering
+and ignored SIGTERM — invisible in a green summary.

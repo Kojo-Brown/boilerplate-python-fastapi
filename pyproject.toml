@@ -113,6 +113,33 @@ dev-dependencies = [
     "mutmut>=3.8.0",
 ]
 
+# --- Load testing (docs/load-testing.md, the `load` CI job) -------------------
+#
+# A PEP 735 dependency group rather than a line in `dev-dependencies` above, and
+# the distinction is load-bearing: `uv sync --all-extras --dev` does not install
+# a named group, so of the six CI jobs only `load` has locust at all.
+#
+# The reason is not install time. Locust registers a `pytest11` entry point
+# (`pytest_locust.plugin`), and pytest loads every such plugin automatically in
+# every run — so putting locust in `dev-dependencies` would add a third-party
+# plugin to the ~5000-test suite and to every forked mutmut worker, in processes
+# whose exit codes gate a merge. That plugin also calls
+# `parser.addoption("--host", "-H", ...)`, claiming a short option this project
+# does not own. Keeping the measuring tool out of the jobs that do the measuring
+# costs one flag in one workflow step.
+#
+# It is harmless when it *is* installed, which is the local case — the gate list
+# in CLAUDE.md syncs the group — and that was measured rather than assumed: with
+# locust present the suite is 4593 passed / 17 skipped at 99.30% and the mutation
+# score is 96.15%, both unchanged. The group is about which jobs carry it, not
+# about whether it breaks anything.
+#
+# Installed with `uv sync --group loadtest`; see `scripts/run_load_test.py`.
+[dependency-groups]
+loadtest = [
+    "locust>=2.47.0",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
@@ -183,6 +210,30 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["docker.*", "asyncpg.*"]
 ignore_missing_imports = true
+
+
+# `locust` ships a `py.typed` marker, so this override does nothing at all when
+# the `loadtest` dependency group is installed — mypy checks `loadtest/` against
+# locust's real types and that is the point. It is here for the environment
+# every *other* gate runs in, where the group deliberately is not installed
+# (see `[dependency-groups]` above): without it, `uv run mypy .` stops at
+# "Cannot find implementation or library stub for module named 'locust'" and
+# checks nothing further, which is a worse outcome than one module's symbols
+# being `Any` on machines that do not have the tool.
+#
+# Two strict checks are relaxed for the locustfile itself and only there,
+# because in that same uninstalled environment `FastHttpUser` and `@task` are
+# both `Any`, and a `User` subclass with `@task` methods is the entire interface
+# locust offers. Every annotation in the file is still checked; the blast radius
+# is one module that imports one optional dependency.
+[[tool.mypy.overrides]]
+module = ["locust.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["locustfile"]
+disallow_subclassing_any = false
+disallow_untyped_decorators = false
 
 # --- Mutation testing (docs/mutation-testing.md, the `mutation` CI job) -------
 #
