@@ -17,6 +17,9 @@ Production-grade FastAPI + Python 3.14 async API boilerplate. Spec-driven and PR
    uv run python -c 'from src.main import app'
    uv run mutmut run && uv run mutmut export-cicd-stats
    uv run python scripts/check_mutation_score.py
+   uv sync --group loadtest
+   uv run python scripts/run_load_test.py
+   uv run python scripts/check_load_budget.py
    ```
    The import check needs a `.env` (`cp .env.example .env`) — settings are
    validated at import time, so it fails without `DATABASE_URL` and `SECRET_KEY`.
@@ -25,6 +28,23 @@ Production-grade FastAPI + Python 3.14 async API boilerplate. Spec-driven and PR
    `mutmut run` exits 0 even when mutants survive, so the threshold is the
    separate script. See `docs/mutation-testing.md` before changing the threshold
    or the `only_mutate` list — and never lower either to turn a red build green.
+   The load gate is the `load` CI job and blocks a merge like the rest, so it
+   belongs in this list too. It is the last two lines because it is the slowest
+   thing here that is not the suite — about seventy seconds, of which sixty are
+   the run itself — and because it wants a Postgres and a Redis on
+   `DATABASE_URL`/`REDIS_URL`, the same two the suite wants. `uv sync
+   --group loadtest` is separate on purpose: locust registers a pytest plugin
+   and no other gate installs it (see `[dependency-groups]` in
+   `pyproject.toml`). `locust --headless` exits 0 at any latency whatsoever, so
+   the ceilings are the separate script, exactly as with mutmut. Read
+   `docs/load-testing.md` before changing a budget or adding a task — the two
+   things that bite are that a task name is declared in
+   `scripts/check_load_budget.py` and imported by the locustfile, so a name the
+   budget table has never heard of fails the gate rather than going unmeasured;
+   and that the budgets carry about fifteenfold headroom over the measured
+   numbers because the job shares a runner with the server it is measuring, so a
+   breach is a real regression and never something to turn green by raising a
+   ceiling.
 6. Commit, `git push -u origin <branch>`, then `gh pr create`.
 7. `gh pr checks --watch` → **merge only if every check is green**:
    `gh pr merge --squash --delete-branch`

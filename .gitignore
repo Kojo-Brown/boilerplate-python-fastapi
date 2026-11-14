@@ -29,5 +29,11 @@ dump.rdb
 # is source — deleting it just forces the next `mutmut run` to be a full one.
 mutants/
 
+# Where `scripts/run_load_test.py` writes locust's four CSVs and the server's
+# log for the run. A measurement of one machine at one moment, not an artifact:
+# the `load` CI job uploads its copy and `docs/load-testing.md` records the
+# numbers that the budgets in `scripts/check_load_budget.py` were set from.
+build/
+
 # macOS
 .DS_Store
